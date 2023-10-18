@@ -1,0 +1,1397 @@
+---
+title: "Figures"
+author: "Katrien Quintelier"
+date: "2023-03-27"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file()) # change wd from path dir to project dir for all chunks
+getwd()
+```
+
+```{r}
+library(ggplotify)
+```
+
+# Visualize initial batch effects
+## Density plots: split out per cell type (before and after normalization)
+```{r}
+for (TP in c("before", "after")){
+  # Read in aggregates
+  agg_P1_C1 <- read.FCS(paste0("tmp/", TP, "/agg_P1_C1.fcs"))
+  agg_P1_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P1_C2.fcs"))
+  agg_P2_C1 <- read.FCS(paste0("tmp/", TP, "/agg_P2_C1.fcs"))
+  agg_P2_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P2_C2.fcs"))
+  
+  # Colnames
+  df_agg_P1_C1 <- data.frame(exprs(agg_P1_C1), check.names = FALSE)
+  colnames(df_agg_P1_C1) <- GetMarkers(agg_P1_C1, channels = colnames(df_agg_P1_C1))
+  df_agg_P1_C1$Manual <- manual_agg[["agg_P1_C1"]]
+  
+  df_agg_P1_C2 <- data.frame(exprs(agg_P1_C2), check.names = FALSE)
+  colnames(df_agg_P1_C2) <- GetMarkers(agg_P1_C2, channels = colnames(df_agg_P1_C2))
+  df_agg_P1_C2$Manual <- manual_agg[["agg_P1_C2"]]
+  
+  df_agg_P2_C1 <- data.frame(exprs(agg_P2_C1), check.names = FALSE)
+  colnames(df_agg_P2_C1) <- GetMarkers(agg_P2_C1, channels = colnames(df_agg_P2_C1))
+  df_agg_P2_C1$Manual <- manual_agg[["agg_P2_C1"]]
+  
+  df_agg_P2_C2 <- data.frame(exprs(agg_P2_C2), check.names = FALSE)
+  colnames(df_agg_P2_C2) <- GetMarkers(agg_P2_C2, channels = colnames(df_agg_P2_C2))
+  colnames(df_agg_P2_C2)[which(colnames(df_agg_P2_C2) == "CD268 (BAFFR)")] <- "CD268"
+  df_agg_P2_C2$Manual <- manual_agg[["agg_P2_C2"]]
+  
+  # Make data frame
+  markers <- unique(c(cellTypeMarkers, P1_cellStateMarkers, P2_cellStateMarkers))
+  names <-unique(c(paste0(cellTypeMarkers, " <", cellTypeChannels, ">"), 
+                   paste0(P1_cellStateMarkers, " <", P1_cellStateChannels, ">"), 
+                   paste0(P2_cellStateMarkers, " <", P2_cellStateChannels, ">")))
+  
+  df <- dplyr::bind_rows(df_agg_P1_C1,
+                         df_agg_P1_C2,
+                         df_agg_P2_C1,
+                         df_agg_P2_C2)
+  df$Batch <- c(rep(x = "P1_C1", times = nrow(agg_P1_C1)),
+                rep(x = "P1_C2", times = nrow(agg_P1_C2)),
+                rep(x = "P2_C1", times = nrow(agg_P2_C1)),
+                rep(x = "P2_C2", times = nrow(agg_P2_C2)))
+  df$File[df$Batch == "P1_C2"] <- df$File[df$Batch == "P1_C2"] + 12
+  df$File[df$Batch == "P2_C1"] <- df$File[df$Batch == "P2_C1"] + 24
+  df$File[df$Batch == "P2_C2"] <- df$File[df$Batch == "P2_C2"] + 36
+  df$Manual <- factor(df$Manual, levels = cellTypes)
+  df <- df[,c(markers, "Manual", "File", "Batch")]
+
+  # Plot
+  plotlist <- list()
+  leg <- NULL
+  for (marker in markers){
+    p <- ggplot(na.omit(df[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+      stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors)+
+      xlab(names[match(marker, markers)]) +
+      theme_minimal() +
+      theme(legend.direction = "horizontal") 
+    if (is.null(leg)){
+      leg <- get_legend(p)
+    }
+    if (length(plotlist) == 0){
+      p <- p + ggtitle("All B cells")
+    }
+    x_range <- layer_scales(p)$x$range$range
+    p <- p + theme(legend.position = "none")
+    plotlist[[length(plotlist) + 1]] <- p
+    
+    for (cellType in cellTypes[-c(1,2)]){
+      df_sub <- na.omit(df[df$Manual == cellType,c(marker, "File", "Batch")])
+      p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+        stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+        stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+        scale_color_manual(values = batch_colors) +
+        xlab(names[match(marker, markers)]) +
+        theme_minimal() + 
+        theme(legend.position = "none") +
+        xlim(x_range)
+    if (length(plotlist) < 7){
+      p <- p + ggtitle(cellType)
+    }
+    plotlist[[length(plotlist) + 1]] <- p
+  
+    }
+  }
+  
+  pdf(paste0("Results/Baselines_densities_cellType_", TP, ".pdf"), height = 30, width =25)
+  print(ggarrange(ggarrange(plotlist = plotlist, ncol = 7, nrow = 15),
+                  ggarrange(as_ggplot(leg)), 
+                  ncol = 1, nrow = 2, heights = c(10,0.5)))
+  dev.off()
+}
+```
+
+## PCA
+```{r}
+set.seed(1)
+inds <- sample(seq_len(nrow(df)), 10000)
+umap_fit <- umap(as.matrix(df[inds,c(1:4, 9, 10)]), scale. = FALSE)
+
+umap_df <- data.frame(UMAP1 = umap_fit$layout[,1],
+                      UMAP2 = umap_fit$layout[,2],
+                      Batch = df$Batch[inds],
+                      df[inds,1:15])
+p <- ggplot(umap_df, aes(x = UMAP1, 
+                     y = UMAP2, 
+                     color = Batch)) +
+  scale_color_manual(values = batch_colors) +
+  geom_point(size = 0.6) +
+  theme_minimal()
+x <- ggdensity(umap_df, "UMAP1", fill = "Batch", color = "Batch", palette = batch_colors, alpha = 0.4) + 
+  rremove("legend") + 
+  clean_theme()
+y <- ggdensity(umap_df, "UMAP2", fill = "Batch", color = "Batch", palette = batch_colors, alpha = 0.4) + 
+  rremove("legend") + 
+  clean_theme() + 
+  rotate()
+l <- get_legend(p)
+p <- p + 
+  theme(legend.position = "none", axis.text = element_blank()) +
+  labs(x="", y="")
+p_ <- ggarrange(x, l, p, y, widths = c(3,1), heights = c(1,3))
+
+plotlist <- list()
+for (batch in c("P1_C1", "P1_C2", "P2_C1", "P2_C2")){
+plotlist[[length(plotlist)+1]] <- ggplot(umap_df[umap_df$Batch == batch,], aes(x = UMAP1, y = UMAP2)) +
+  geom_point(data = umap_df, size = 0.6, colour = "grey") +
+  geom_point(size = 0.6, aes(color = Batch)) +
+  scale_color_manual(values = batch_colors) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  clean_theme()
+}
+
+pdf("Results/Baselines_UMAP.pdf")
+print(p_)
+print(ggarrange(plotlist = plotlist))
+dev.off()
+```
+
+## Manual labeling on FlowSOM tree
+```{r}
+agg_files <- c("agg_P1_C1" = "tmp/before/agg_P1_C1.fcs",
+               "agg_P1_C2" = "tmp/before/agg_P1_C2.fcs",
+               "agg_P2_C1" = "tmp/before/agg_P2_C1.fcs",
+               "agg_P2_C2" = "tmp/before/agg_P2_C2.fcs")
+
+pdf("Results/fsom_manualLabeling.pdf")
+for (agg in c("agg_P1_C1", "agg_P2_C1", "agg_P1_C2", "agg_P2_C2")){
+  fsom_tmp <- NewData(fsom = model1_withoutControl$fsom,
+                      input = agg_files[agg])
+  print(PlotPies(fsom = fsom_tmp,
+                 cellTypes = manual_agg[[agg]], 
+                 backgroundValues = fsom_tmp$metaclustering))
+}
+dev.off()
+```
+
+## Check clustering
+```{r}
+Plot2DScatters(fsom = model1_withoutControl$fsom, 
+               channelpairs = list(c("BV421-A", "BB700-A"),
+                                   c("BV421-A", "PE-Cy7-A"),
+                                   c("BV421-A", "BV605-A")), 
+               metaclusters = seq_len(NMetaclusters(model1_withoutControl$fsom)),
+               plotFile = "Results/Model1_2DScatters.png")
+
+```
+
+# Figure2: Explanation spline plot
+Normalize P2_C2 towards P2_C1
+## Plotlists
+```{r}
+# Get the exact values for the filling
+model <- readRDS("RDS/model3_cellStateMarkersP1.rds")
+channels <- "BV711-A"#"CD24"
+spline_x <- seq(-5, 5, (5 - (-5))/100)
+spline_list <- list()
+for (batch in c("C1", "C2")) {
+  spline_points <- lapply(names(model$clusterRes), function(cluster) {
+    splines <- model$clusterRes[[cluster]]$splines
+    l <- lapply(channels, function(channel) {
+      data.frame(cluster = cluster, channel = channel, 
+        x = spline_x, y = splines[[batch]][[channel]](spline_x))
+    })
+    do.call(rbind, l)
+  })
+  spline_list[[batch]] <- spline_points
+}
+
+
+# Make aggregates
+set.seed(1)
+agg_P1_C1 <- read.FCS("tmp/before/agg_P1_C1.fcs")
+agg_P1_C2 <- read.FCS("tmp/before/agg_P1_C2.fcs")
+agg_P1_C1_norm <- read.FCS("tmp/after/agg_P1_C1.fcs")
+agg_P1_C2_norm <- read.FCS("tmp/after/agg_P1_C2.fcs")
+
+# Map aggregates on fsom tree
+mclustering <- c()
+model1_withoutControl <- readRDS("RDS/model1_withoutControl.rds")
+fsom <- model1_withoutControl$fsom
+for (agg in c(agg_P1_C1, agg_P1_C2)){
+  fsom_tmp <- NewData(fsom, agg)
+  mclustering <- c(mclustering, GetMetaclusters(fsom_tmp))
+}
+mclustering_norm <- mclustering
+
+# Colnames
+df_agg_P1_C1 <- data.frame(exprs(agg_P1_C1), check.names = FALSE)
+colnames(df_agg_P1_C1) <- GetMarkers(agg_P1_C1, channels = colnames(df_agg_P1_C1))
+df_agg_P1_C2 <- data.frame(exprs(agg_P1_C2), check.names = FALSE)
+colnames(df_agg_P1_C2) <- GetMarkers(agg_P1_C2, channels = colnames(df_agg_P1_C2))
+colnames(df_agg_P1_C2)[which(colnames(df_agg_P1_C2) == "CD268 (BAFFR)")] <- "CD268"
+df_agg_P1_C1_norm <- data.frame(exprs(agg_P1_C1_norm), check.names = FALSE)
+colnames(df_agg_P1_C1_norm) <- GetMarkers(agg_P1_C1_norm, channels = colnames(df_agg_P1_C1_norm))
+df_agg_P1_C2_norm <- data.frame(exprs(agg_P1_C2_norm), check.names = FALSE)
+colnames(df_agg_P1_C2_norm) <- GetMarkers(agg_P1_C2_norm, channels = colnames(df_agg_P1_C2_norm))
+colnames(df_agg_P1_C2_norm)[which(colnames(df_agg_P1_C2_norm) == "CD268 (BAFFR)")] <- "CD268"
+
+# Make data frames
+channel <- "BV711-A"
+markers <- "CD24"
+df <- dplyr::bind_rows(df_agg_P1_C1,
+                       df_agg_P1_C2)
+df$Batch <- c(rep(x = "P1_C1", times = nrow(agg_P1_C1)),
+              rep(x = "P1_C2", times = nrow(agg_P1_C2)))
+df$File[df$Batch == "P1_C2"] <- df$File[df$Batch == "P1_C2"] + 12
+df <- df[,c(markers, "File", "Batch")]
+df$MC <- mclustering
+
+df_norm <- dplyr::bind_rows(df_agg_P1_C1_norm,
+                            df_agg_P1_C2_norm)
+df_norm$Batch <- c(rep(x = "P1_C1", times = nrow(df_agg_P1_C1_norm)),
+              rep(x = "P1_C2", times = nrow(df_agg_P1_C2_norm)))
+df_norm$File[df_norm$Batch == "P1_C2"] <- df_norm$File[df_norm$Batch == "P1_C2"] + 12
+df_norm <- df_norm[,c(markers, "File", "Batch")]
+df_norm$MC <- mclustering_norm
+
+
+# Plot
+yintercepts <- c()
+quantiles <- c()
+plotlist <- list()
+plotlist_norm <- list()
+leg <- NULL
+for (marker in markers){
+  p <- ggplot(na.omit(df[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+    stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+    stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+    scale_color_manual(values = batch_colors)+
+    xlab(paste0(channel, " (", marker, ")")) +
+    theme_minimal() + 
+    labs(color = "Batch                 ")  #+
+    #theme(legend.direction = "horizontal") 
+  if (is.null(leg)){
+    leg <- get_legend(p)
+  }
+  x_range <- layer_scales(p)$x$range$range
+  p <- p + theme(legend.position = "none")
+  plotlist[[length(plotlist) + 1]] <- p
+
+  p <- ggplot(na.omit(df_norm[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+    stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+    stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+    scale_color_manual(values = batch_colors)+
+    xlab(paste0(channel, " (", marker, ")")) +
+    theme_minimal() +
+    theme(legend.direction = "horizontal") +
+    xlim(x_range) + 
+    theme(legend.position = "none")
+  plotlist_norm[[length(plotlist_norm) + 1]] <- p
+  
+  for (MC in c(1:3)){
+    yintercepts <- c(yintercepts, spline_list$C2[[MC]][66, "y"])
+    quantiles <- c(quantiles, names(which(abs(1.5-model$clusterRes[[MC]][["quantiles"]][["C2"]][,"BV711-A"]) == min(abs(1.5-model$clusterRes[[MC]][["quantiles"]][["C2"]][,"BV711-A"])))))
+    x_spline <- model$clusterRes[[MC]][["quantiles"]][["C1"]][,"BV711-A"][quantiles[length(quantiles)]]
+    df_sub <- na.omit(df[df$MC == MC,c(marker, "File", "Batch")])
+    df_sub_P1_C1 <- data.frame(x=density(df_sub[df_sub$Batch == "P1_C1", "CD24"])$x, 
+                               y=density(df_sub[df_sub$Batch == "P1_C1", "CD24"])$y,
+                               Batch = "P1_C1")
+    df_sub_P1_C2 <- data.frame(x=density(df_sub[df_sub$Batch == "P1_C2", "CD24"])$x, 
+                               y=density(df_sub[df_sub$Batch == "P1_C2", "CD24"])$y,
+                               Batch = "P1_C2")
+    p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+      #stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors) +
+      xlab(paste0(channel, " (", marker, ")")) +
+      theme_minimal() + 
+      theme(legend.position = "none") +
+      xlim(x_range) + 
+      geom_ribbon(data=subset(df_sub_P1_C1,(x < x_spline)),
+                  aes(x=x,ymax=y),ymin=0,fill="#900002", alpha=0.3)+
+      geom_ribbon(data=subset(df_sub_P1_C2, x < 1.5),
+                  aes(x=x,ymax=y),ymin=0,fill="#FF3437", alpha=0.3)
+  plotlist[[length(plotlist) + 1]] <- p
+  
+    df_sub <- na.omit(df_norm[df_norm$MC == MC,c(marker, "File", "Batch")])
+    df_sub_P1_C1 <- data.frame(x=density(df_sub[df_sub$Batch == "P1_C1", "CD24"])$x, 
+                               y=density(df_sub[df_sub$Batch == "P1_C1", "CD24"])$y,
+                               Batch = "P1_C1")
+    df_sub_P1_C2 <- data.frame(x=density(df_sub[df_sub$Batch == "P1_C2", "CD24"])$x, 
+                               y=density(df_sub[df_sub$Batch == "P1_C2", "CD24"])$y,
+                               Batch = "P1_C2")
+    
+    p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+      #stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors) +
+      xlab(paste0(channel, " (", marker, ")")) +
+      theme_minimal() + 
+      theme(legend.position = "none") +
+      xlim(x_range) + 
+      geom_ribbon(data=subset(df_sub_P1_C1,(x < x_spline)),
+                  aes(x=x,ymax=y),ymin=0,fill="#900002", alpha=0.3)+
+      geom_ribbon(data=subset(df_sub_P1_C2, x < x_spline),
+                  aes(x=x,ymax=y),ymin=0,fill="#FF3437", alpha=0.3)
+
+  plotlist_norm[[length(plotlist_norm) + 1]] <- p
+
+
+  }
+}
+```
+
+## Spline plot
+```{r}
+splines <- plotSplines(model = model3_cellStateMarkersP1, channels = "BV711-A", groupClusters = TRUE)
+for (i in 1:length(splines)){
+splines[[i]] <- splines[[i]]+
+  scale_color_manual(values = MC_colors)
+}
+splines[[2]] <- splines[[2]] +
+  geom_vline(xintercept = 1.5, color = "#FF3437", linetype = "dashed") +
+  geom_hline(yintercept = yintercepts, color = "#900002", linetype = "dashed") + 
+  labs(color = "FlowSOM cluster")
+leg2 <- get_legend(splines[[2]])
+```
+
+## Arrangement
+```{r}
+plotlist[[1]] <- plotlist[[1]] +
+  ggtitle(label = "Before normalization",
+          subtitle = "All data")
+plotlist_norm[[1]] <- plotlist_norm[[1]] +
+  ggtitle(label = "After normalization",
+          subtitle = "All data")
+
+for (i in 2:length(plotlist)){
+  plotlist[[i]] <- plotlist[[i]] +
+  ggtitle(label = "", subtitle = paste0("Cluster ", names(MC_colors)[(i-1)])) +
+    theme(plot.subtitle = element_text(color = MC_colors[(i-1)]))
+  plotlist_norm[[i]] <- plotlist_norm[[i]] +
+  ggtitle(label = "", subtitle = paste0("Cluster ", names(MC_colors)[(i-1)])) +
+    theme(plot.subtitle = element_text(color = MC_colors[(i-1)]))
+}
+  
+splines[[2]] <- splines[[2]] + 
+  ggtitle("Splines to normalize P1_C2 to P1_C1") +
+  theme(legend.position = "none")
+
+pdf("Results/Figure2.pdf", height = 10, width = 12)
+# cairo_ps(filename = "Results/Figure2.eps",
+#          width = 12, height = 10, pointsize = 12,
+#          fallback_resolution = 300)
+
+p <- ggarrange(ggarrange(plotlist = plotlist, ncol = 4, nrow = 1),
+               NULL,
+               ggarrange(plotlist = list(ggarrange(NULL, as_ggplot(leg), as_ggplot(leg2), NULL, nrow = 4, ncol = 1, heights = c(1,2,2,1), align = "v"), 
+                                         NULL, splines[[2]], NULL), ncol = 4, nrow = 1),
+               NULL,
+               ggarrange(plotlist = plotlist_norm, ncol = 4, nrow = 1),
+               nrow = 5, heights = c(5,0.5,6,0.5,5))
+print(p)
+dev.off()
+```
+
+
+# Figure 3: Results plot for model 1
+## Density plots
+```{r}
+# List files
+files_P1_C1_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[1-4]_Panel1_TP..fcs", full.names = TRUE)
+files_P2_C1_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[1-4]_Panel2_TP..fcs", full.names = TRUE)
+
+# Make plots
+p <- plotDensities(input = list("P1_C1" = files_P1_C1,
+                                "P2_C1" = files_P2_C1,
+                                "P1_C1_norm" = files_P1_C1_norm,
+                                "P2_C1_norm" = files_P2_C1_norm),
+                   channels = cellTypeChannels,
+                   colors = batch_colors)
+
+xlab_colors <- c("#F8766D", "#F8766D", "#7CAE00", "#7CAE00", "#00BFC4", "#00BFC4", "#C77CFF", "#C77CFF")
+for (i in 1:(length(p)-1)){
+  p[[i]] <- p[[i]] +
+    theme(axis.title.x=element_text(colour=xlab_colors[i]))
+}
+
+
+# p[[1]] <- p[[1]] + xlim(-2,5)
+# p[[2]] <- p[[2]] + xlim(-2,5)
+# p[[3]] <- p[[3]] + xlim(-1,5)
+# p[[4]] <- p[[4]] + xlim(-1,5)
+# p[[5]] <- p[[5]] + xlim(-1,4)
+# p[[6]] <- p[[6]] + xlim(-1,4)
+# p[[7]] <- p[[7]] + xlim(0,4)
+# p[[8]] <- p[[8]] + xlim(0,4)
+
+# for (i in c(1, 3, 5, 7)){
+#   p[[i]] <- p[[i]] + xlab("")
+# }
+# for (i in c(3:8)){
+#   p[[i]] <- p[[i]] + ylab("")
+# }
+# p[[1]] <- p[[1]] + ylab("Density before \n normalization")
+# p[[2]] <- p[[2]] + ylab("Density after \n normalization")
+# 
+# p_ <- list()
+# p_[1:4] <- p[c(1, 3, 5, 7)]
+# p_[5:8] <- p[c(2, 4, 6, 8)]
+
+# p1 <- ggarrange(ggarrange(plotlist = p_[1:(2*length(cellTypeChannels))], nrow = 2, ncol = length(cellTypeChannels)),
+#                as_ggplot(p$legend), 
+#                ncol = 2, nrow = 1, widths = c(10,1))
+p1 <- ggarrange(ggarrange(plotlist = c(p[c(1, 3, 5, 7)], p[c(2, 4, 6, 8)]), ncol = 4, nrow = 2),
+                as_ggplot(p$legend), ncol = 2, widths = c(10,1))
+
+```
+
+## EMD and MAD plot
+```{r}
+for (subset in "Model1"){
+  markerlevels <- NULL
+  plotlist <- list()
+  for (eval in names(EMD_scores)[3]){
+    # EMD plot
+    EMD_before <- EMD_scores[[eval]][[paste0(subset, "_before")]][-2,]
+    EMD_after <- EMD_scores[[eval]][[paste0(subset, "_after")]][-2,]
+    rownames(EMD_before)[1] <- "All B cells"
+    rownames(EMD_after)[1] <- "All B cells"
+    
+    EMD_df <- data.frame("before" = c(EMD_before),
+                         "after" = c(EMD_after),
+                         "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+    if (is.null(markerlevels)){
+      markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+    }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) + 
+      labs(color = "Marker",
+           shape = "Cell type") +
+      xlim(0,max) + ylim(0,max) +
+#      geom_point(aes(color = worse)) +
+      geom_point(aes(color = marker, shape = celltype), size = 3) +#, size = 0.6)) +
+#      scale_color_manual(values = c("black", "red"))+
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#      ggrepel::geom_text_repel(aes(label = feature),# color = worse), 
+#                               size = 2, max.overlaps = Inf) +
+      ggtitle(paste0("(i) ", subset, " ", eval, " EMD")) +
+      theme_minimal() +#+ 
+      # theme(legend.position = "bottom", 
+      #       legend.box="vertical", 
+      #       legend.margin=margin(),
+      #       legend.key.size = unit(1, 'cm'), 
+      #   legend.title = element_text(size=16), 
+      #   legend.text = element_text(size=12)) + 
+      # guides(size = FALSE, colour = guide_legend(override.aes = list(size=4)),
+      #        shape = guide_legend(override.aes = list(size=4)))
+      guides(size = FALSE) +
+      xlab("normalized") +
+      ylab("original")
+  
+  leg_emd <- get_legend(p_emd)
+
+  p_emd <- p_emd  +
+      theme(legend.position = "none")
+  plotlist[[length(plotlist)+1]] <- p_emd    
+  }
+  
+  names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+  
+  # MAD plot
+  MAD_before <- MADs[[paste0(subset, "_before")]][["comparison"]][-2,]
+  MAD_after <- MADs[[paste0(subset, "_after")]][["comparison"]][-2,]
+  rownames(MAD_before)[1] <- "All B cells"
+  rownames(MAD_after)[1] <- "All B cells"
+
+  MAD_df <- data.frame("before" = c(MAD_before),
+                       "after" = c(MAD_after),
+                       "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_"))
+  MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels)
+  MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes)
+  max <- max(MAD_df[,1:2], na.rm = T)
+  MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25
+  MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature)
+  p_mad <- ggplot(MAD_df, aes(x = after, y = before)) +
+    xlim(0,max) + ylim(0,max) +
+#    geom_point(aes(color = bad)) +
+    geom_point(aes(color = marker, shape = celltype), size = 3) +#, size = 0.6)) +
+#    scale_color_manual(values = c("black", "red"))+
+    geom_abline() +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#    ggrepel::geom_text_repel(aes(label = feature, color = bad), 
+#                             size = 2, max.overlaps = Inf) +
+    ggtitle(paste0("(ii) ", subset, " MAD")) +
+    theme_minimal()  +
+      xlab("normalized") +
+      ylab("original")
+
+  leg_mad <- get_legend(p_mad)
+
+  p_mad <- p_mad  +
+      theme(legend.position = "none")
+
+  plotlist[[length(plotlist)+1]] <- p_mad
+}
+
+p2 <- plotlist[[1]]
+p3 <- as.ggplot(leg_emd)
+p4 <- plotlist[[2]]
+```
+
+
+## Bring everything together
+```{r}
+pdf("Results/Figure3.pdf", width = 12, height = 10)
+
+p <- ggarrange(ggarrange(p2, p4, p3, nrow=1, widths = c(2, 2, 1.2)), 
+               ggarrange(NULL, p1, widths = c(0.2, 10)), 
+               ncol = 1, labels = c("A", "B"))#, heights = c(5, 3))
+print(p)
+dev.off()
+```
+
+
+# Figure 4: Results plot for model 2
+## Density plots
+```{r}
+p1_plotlist <- list()
+leg <- NULL
+for (TP in c("before", "after")){
+  # Read in aggregates
+  agg_P1_C1 <- read.FCS(paste0("tmp/after/agg_P1_C1.fcs"))
+  agg_P1_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P1_C2.fcs"))
+  agg_P2_C1 <- read.FCS(paste0("tmp/after/agg_P2_C1.fcs"))
+  agg_P2_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P2_C2.fcs"))
+  
+  # Colnames
+  df_agg_P1_C1 <- data.frame(exprs(agg_P1_C1), check.names = FALSE)
+  colnames(df_agg_P1_C1) <- GetMarkers(agg_P1_C1, channels = colnames(df_agg_P1_C1))
+  df_agg_P1_C1$Manual <- manual_agg[["agg_P1_C1"]]
+  
+  df_agg_P1_C2 <- data.frame(exprs(agg_P1_C2), check.names = FALSE)
+  colnames(df_agg_P1_C2) <- GetMarkers(agg_P1_C2, channels = colnames(df_agg_P1_C2))
+  df_agg_P1_C2$Manual <- manual_agg[["agg_P1_C2"]]
+  
+  df_agg_P2_C1 <- data.frame(exprs(agg_P2_C1), check.names = FALSE)
+  colnames(df_agg_P2_C1) <- GetMarkers(agg_P2_C1, channels = colnames(df_agg_P2_C1))
+  df_agg_P2_C1$Manual <- manual_agg[["agg_P2_C1"]]
+  
+  df_agg_P2_C2 <- data.frame(exprs(agg_P2_C2), check.names = FALSE)
+  colnames(df_agg_P2_C2) <- GetMarkers(agg_P2_C2, channels = colnames(df_agg_P2_C2))
+  colnames(df_agg_P2_C2)[which(colnames(df_agg_P2_C2) == "CD268 (BAFFR)")] <- "CD268"
+  df_agg_P2_C2$Manual <- manual_agg[["agg_P2_C2"]]
+  
+  # Make data frame
+  markers <- c("IgM", "CD27")
+  names <-unique(c(paste0(cellTypeMarkers, " <", cellTypeChannels, ">"), 
+                   paste0(P1_cellStateMarkers, " <", P1_cellStateChannels, ">"), 
+                   paste0(P2_cellStateMarkers, " <", P2_cellStateChannels, ">")))
+  
+  df <- dplyr::bind_rows(df_agg_P1_C1,
+                         df_agg_P1_C2,
+                         df_agg_P2_C1,
+                         df_agg_P2_C2)
+  df$Batch <- c(rep(x = "P1_C1", times = nrow(agg_P1_C1)),
+                rep(x = "P1_C2", times = nrow(agg_P1_C2)),
+                rep(x = "P2_C1", times = nrow(agg_P2_C1)),
+                rep(x = "P2_C2", times = nrow(agg_P2_C2)))
+  df$File[df$Batch == "P1_C2"] <- df$File[df$Batch == "P1_C2"] + 12
+  df$File[df$Batch == "P2_C1"] <- df$File[df$Batch == "P2_C1"] + 24
+  df$File[df$Batch == "P2_C2"] <- df$File[df$Batch == "P2_C2"] + 36
+  df$Manual <- factor(df$Manual, levels = cellTypes)
+  df <- df[,c(markers, "Manual", "File", "Batch")]
+
+  # Plot
+  for (marker in markers){
+
+  plotlist <- list()
+    p <- ggplot(na.omit(df[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+      stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors)+
+      xlab(paste0(marker, " <", GetChannels(agg_P1_C1, marker), ">")) +
+      xlim(c(-1,5)) +
+      theme_minimal() +
+      ylab(ifelse(TP == "before", "original", "normalized"))#+
+      #theme(legend.direction = "horizontal") 
+    if (is.null(leg)){
+      leg <- get_legend(p)
+    }
+    if (TP == "before" & marker == markers[1]){
+      p <- p + ggtitle(label = "", subtitle = "All B cells")
+    } 
+    if (TP == "before"){
+      x_range <- layer_scales(p)$x$range$range
+    } 
+    p <- p + theme(legend.position = "none") +
+       theme(axis.title.x=element_text(colour=ifelse(marker == "CD27", "#F8766D", "#C77CFF"))) 
+    plotlist[[length(plotlist) + 1]] <- p
+    
+    for (cellType in cellTypes[-c(1,2)]){
+      df_sub <- na.omit(df[df$Manual == cellType,c(marker, "File", "Batch")])
+      p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+        stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+        stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+        scale_color_manual(values = batch_colors) +
+        xlab(paste0(marker, " <", GetChannels(agg_P1_C1, marker), ">")) +
+        theme_minimal() + 
+        theme(legend.position = "none") +
+        xlim(c(-1,5)) +
+        ylab("") +
+       theme(axis.title.x=element_text(colour=ifelse(marker == "CD27", "#F8766D", "#C77CFF"))) 
+    if (TP == "before" & marker == markers[1]){
+      p <- p + ggtitle(label = "", subtitle = cellType)  +
+        theme(plot.subtitle = element_text(hjust = 0.5))
+      }
+      plotlist[[length(plotlist) + 1]] <- p
+  
+    }
+  p1_plotlist[[length(p1_plotlist)+1]] <- ggarrange(plotlist = plotlist, ncol = 7, nrow = 1)
+  }
+}
+
+p1_plotlist[[length(p1_plotlist)+1]] <- NULL
+
+p1 <- ggarrange(ggarrange(plotlist = c(p1_plotlist[1], p1_plotlist[3], p1_plotlist[5], p1_plotlist[2], p1_plotlist[4]), ncol = 1, nrow = 5, heights = c(2.6, 2, 0.3, 2, 2)), 
+                as_ggplot(leg), ncol = 2, nrow = 1, widths = c(10,1))
+```
+
+## EMD and MAD plot
+```{r}
+for (subset in "Model2"){
+  markerlevels <- NULL
+  plotlist <- list()
+  for (eval in names(EMD_scores)[3]){
+    # EMD plot
+    EMD_before <- EMD_scores[[eval]][[paste0(subset, "_before")]][-2,]
+    EMD_after <- EMD_scores[[eval]][[paste0(subset, "_after")]][-2,]
+    rownames(EMD_before)[1] <- "All B cells"
+    rownames(EMD_after)[1] <- "All B cells"
+    
+    EMD_df <- data.frame("before" = c(EMD_before),
+                         "after" = c(EMD_after),
+                         "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+    if (is.null(markerlevels)){
+      markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+    }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) +
+      xlim(0,max) + ylim(0,max) +
+#      geom_point(aes(color = worse)) +
+      geom_point(aes(color = marker, shape = celltype), size = 3) +#, size = 0.6)) +
+#      scale_color_manual(values = c("black", "red"))+
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#      ggrepel::geom_text_repel(aes(label = feature),# color = worse), 
+#                               size = 2, max.overlaps = Inf) +
+      ggtitle(paste0("(i) ", subset, " ", eval, " EMD")) +
+      theme_minimal() + 
+      labs(color = "Marker",
+           shape = "Cell type") +
+      theme(legend.position = "bottom", 
+            legend.box="vertical")#, 
+#            legend.margin=margin(),
+#            legend.key.size = unit(1, 'cm'), 
+#        legend.title = element_text(size=16), 
+#        legend.text = element_text(size=12)) #+ 
+#      guides(size = FALSE, colour = guide_legend(override.aes = list(size=4)),
+#             shape = guide_legend(override.aes = list(size=4)))
+  leg_emd <- get_legend(p_emd)
+
+  p_emd <- p_emd  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+  plotlist[[length(plotlist)+1]] <- p_emd    
+  }
+  
+  names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+  
+  # MAD plot
+  MAD_before <- MADs[[paste0(subset, "_before")]][["comparison"]][-2,]
+  MAD_after <- MADs[[paste0(subset, "_after")]][["comparison"]][-2,]
+  rownames(MAD_before)[1] <- "All B cells"
+  rownames(MAD_after)[1] <- "All B cells"
+
+  MAD_df <- data.frame("before" = c(MAD_before),
+                       "after" = c(MAD_after),
+                       "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_"))
+  MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels)
+  MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes)
+  max <- max(MAD_df[,1:2], na.rm = T)
+  MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25
+  MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature)
+  p_mad <- ggplot(MAD_df, aes(x = after, y = before)) +
+    xlim(0,max) + ylim(0,max) +
+#    geom_point(aes(color = bad)) +
+    geom_point(aes(color = marker, shape = celltype), size = 3) +#, size = 0.6)) +
+#    scale_color_manual(values = c("black", "red"))+
+    geom_abline() +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#    ggrepel::geom_text_repel(aes(label = feature, color = bad), 
+#                             size = 2, max.overlaps = Inf) +
+    ggtitle(paste0("(ii) ", subset, " MAD")) +
+    theme_minimal()
+
+  leg_mad <- get_legend(p_mad)
+
+  p_mad <- p_mad  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+
+  plotlist[[length(plotlist)+1]] <- p_mad
+}
+
+p2 <- plotlist[[1]]
+p3 <- as.ggplot(leg_emd)
+p4 <- plotlist[[2]]
+```
+
+## Aggregates contribution plot: barplot with cell type composition per aggregate file
+```{r}
+agg_name <- c()
+man_labels <- c()
+clustering <- c()
+
+agg_objects <- c(agg_P1_C1, agg_P2_C1, agg_P1_C2, agg_P2_C2)
+agg_names <- c("agg_P1_C1", "agg_P2_C1", "agg_P1_C2", "agg_P2_C2")
+for (i in 1:length(agg_objects)){
+  agg_name <- c(agg_name, rep(agg_names[i], nrow(agg_objects[[i]])))
+  man_labels <- c(man_labels, as.character(manual_agg[[agg_names[i]]]))
+  fsom_tmp <- NewData(model1_withoutControl$fsom, agg_objects[[i]])
+  clustering <- c(clustering, paste0("Cluster ", GetMetaclusters(fsom_tmp)))
+}
+
+df <- data.frame("Batch aggregate" = agg_name,
+                 "Cell type" = man_labels,
+                 "FlowSOM cluster" = clustering,
+                 check.names = FALSE)
+
+df <- data.frame(data.table::setDT(df)[,list(Contribution=.N),names(df)], check.names = FALSE)
+
+df$`Batch aggregate` <- factor(df$`Batch aggregate`, 
+                               levels = c("agg_P1_C1", "agg_P2_C1", "agg_P1_C2", "agg_P2_C2"))
+df$`Cell type` <- factor(df$`Cell type`,
+                         levels = c("Transitional B cells", "Naive B cells", 
+                                    "IgD+ memory B cells", "IgM+ memory B cells", 
+                                    "Class switched memory B cells", 
+                                    "Double negative B cells", "unlabeled"))
+
+plotlist <- list()
+i <- 1
+
+leg <- get_legend(ggplot(data = df, 
+                         aes(x = `Batch aggregate`, y = Contribution, fill = `Cell type`)) +
+                    geom_bar(position="fill", stat="identity") +
+                    scale_fill_manual(values = c("#fbf8cc", "#ffcfd2", "#b9fbc0", "#a3c4f3", "#cfbaf0", "#8eecf5", "#edede9")) +
+                    facet_wrap(~`FlowSOM cluster`,nrow=1))
+
+for (cluster in c("Cluster 1", "Cluster 2", "Cluster 3")){
+  plotlist[[length(plotlist)+1]] <-  ggplot(data = df[df$`FlowSOM cluster` == cluster,], aes(x = `Batch aggregate`, y = Contribution, fill = `Cell type`)) +
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values = c("#fbf8cc", "#ffcfd2", "#b9fbc0", "#a3c4f3", "#cfbaf0", "#8eecf5", "#edede9")) +
+#    facet_wrap(~`FlowSOM cluster`,nrow=1) +
+  xlab("") + ylab("Composition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.2,
+                                   colour = c("#900002", "#0046A1", 
+                                              "#FF3437", "#6FCFFF")),
+        axis.ticks = element_blank())+
+    ggtitle(label = "", subtitle = cluster) +
+    theme(plot.subtitle = element_text(color = MC_colors[(i)],
+                                       hjust = 0.5)) #+
+    #theme(legend.title = element_text(size=16), 
+    #      legend.text = element_text(size=12))
+
+  if (cluster != "Cluster 1"){
+    plotlist[[length(plotlist)]] <- plotlist[[length(plotlist)]] +
+      theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+  }
+  plotlist[[length(plotlist)]] <- plotlist[[length(plotlist)]] +
+      theme(legend.position = "none")
+  
+  i <- i + 1
+}
+plotlist[[length(plotlist)+1]] <- as_ggplot(leg)
+p5 <- ggarrange(plotlist = plotlist, nrow = 1, widths = c(2.85, 2, 2, 4.4))
+```
+
+
+## Bring everything together
+```{r}
+pdf("Results/Figure4.pdf", width = 16, height = 14)
+p <- ggarrange(ggarrange(ggarrange(
+                           ggarrange(p2,p4, 
+                                     nrow = 1, labels = c("A", "")),p3, NULL, 
+                           ncol = 1, heights = c(3, 0.5, 0.1)), p5, 
+                         nrow = 1, labels = c("", "B"), widths = c(2,1)), ggarrange(NULL, p1, nrow = 1, widths = c(0.5,40)), 
+               ncol = 1, labels = c("", "C"), heights = c(3.5,5))
+print(p)
+dev.off()
+```
+
+# Figure 5: Results plot for models 3
+## Density plots PDL1
+```{r}
+p1_plotlist <- list()
+leg <- NULL
+for (TP in c("before", "after")){
+  # Read in aggregates
+  agg_P1_C1 <- read.FCS(paste0("tmp/", TP, "/agg_P1_C1.fcs"))
+  agg_P1_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P1_C2.fcs"))
+
+  # Colnames
+  df_agg_P1_C1 <- data.frame(exprs(agg_P1_C1), check.names = FALSE)
+  colnames(df_agg_P1_C1) <- GetMarkers(agg_P1_C1, channels = colnames(df_agg_P1_C1))
+  df_agg_P1_C1$Manual <- manual_agg[["agg_P1_C1"]]
+  
+  df_agg_P1_C2 <- data.frame(exprs(agg_P1_C2), check.names = FALSE)
+  colnames(df_agg_P1_C2) <- GetMarkers(agg_P1_C2, channels = colnames(df_agg_P1_C2))
+  df_agg_P1_C2$Manual <- manual_agg[["agg_P1_C2"]]
+
+  # Make data frame
+  markers <- "PDL1"
+
+  df <- dplyr::bind_rows(df_agg_P1_C1,
+                         df_agg_P1_C2)
+  df$Batch <- c(rep(x = "P1_C1", times = nrow(agg_P1_C1)),
+                rep(x = "P1_C2", times = nrow(agg_P1_C2)))
+  df$File[df$Batch == "P1_C2"] <- df$File[df$Batch == "P1_C2"] + 12
+  df$Manual <- factor(df$Manual, levels = cellTypes)
+  df <- df[,c(markers, "Manual", "File", "Batch")]
+
+  # Plot
+  plotlist <- list()
+  for (marker in markers){
+    p <- ggplot(na.omit(df[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+      stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors) +
+      xlim(c(-1,4)) +
+      theme_minimal() +
+      xlab(paste0(marker, " <", GetChannels(agg_P1_C1, markers = marker), ">")) +
+      ylab(ifelse(TP == "before", "original", "normalized")) +
+      theme(plot.subtitle = element_text(hjust = 0.5),
+            axis.title.x=element_text(colour="#00C094")) #+
+      #theme(legend.direction = "horizontal") 
+    if (is.null(leg)){
+      leg <- get_legend(p)
+    }
+    if (TP == "before"){
+      p <- p + 
+        ggtitle(label = "", subtitle = "All B cells")
+      x_range <- layer_scales(p)$x$range$range
+    }
+    p <- p + theme(legend.position = "none")
+    plotlist[[length(plotlist) + 1]] <- p
+    
+    for (cellType in cellTypes[-c(1,2)]){
+      df_sub <- na.omit(df[df$Manual == cellType,c(marker, "File", "Batch")])
+      p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+        stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+        stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+        scale_color_manual(values = batch_colors) +
+        xlab(paste0(marker, " <", GetChannels(agg_P1_C1, markers = marker), ">")) +
+        theme_minimal() + 
+        theme(legend.position = "none") +
+        xlim(c(-1,4)) +
+        ylab("") +
+        theme(plot.subtitle = element_text(hjust = 0.5),
+              axis.title.x=element_text(colour="#00C094"))
+    if (TP == "before"){
+      p <- p + 
+        ggtitle(label = "", subtitle = cellType)
+    }
+    plotlist[[length(plotlist) + 1]] <- p
+    }
+  }
+  p1_plotlist[[length(p1_plotlist)+1]] <- ggarrange(plotlist = plotlist, ncol = 7, nrow = 1)
+}
+
+p1 <- ggarrange(ggarrange(plotlist = p1_plotlist, ncol = 1, nrow = 2, heights = c(1.3, 1)), 
+                as_ggplot(leg), ncol = 2, nrow = 1, widths = c(10,1))
+```
+
+## Density plots HLA-DR
+```{r}
+p1_plotlist <- list()
+leg <- NULL
+for (TP in c("before", "after")){
+  # Read in aggregates
+  agg_P2_C1 <- read.FCS(paste0("tmp/", TP, "/agg_P2_C1.fcs"))
+  agg_P2_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P2_C2.fcs"))
+  
+  # Colnames
+  df_agg_P2_C1 <- data.frame(exprs(agg_P2_C1), check.names = FALSE)
+  colnames(df_agg_P2_C1) <- GetMarkers(agg_P2_C1, channels = colnames(df_agg_P2_C1))
+  df_agg_P2_C1$Manual <- manual_agg[["agg_P2_C1"]]
+  
+  df_agg_P2_C2 <- data.frame(exprs(agg_P2_C2), check.names = FALSE)
+  colnames(df_agg_P2_C2) <- GetMarkers(agg_P2_C2, channels = colnames(df_agg_P2_C2))
+  colnames(df_agg_P2_C2)[which(colnames(df_agg_P2_C2) == "CD268 (BAFFR)")] <- "CD268"
+  df_agg_P2_C2$Manual <- manual_agg[["agg_P2_C2"]]
+  
+  # Make data frame
+  markers <- "HLA-DR"
+  names <-unique(c(paste0(cellTypeMarkers, " <", cellTypeChannels, ">"), 
+                   paste0(P1_cellStateMarkers, " <", P1_cellStateChannels, ">"), 
+                   paste0(P2_cellStateMarkers, " <", P2_cellStateChannels, ">")))
+  
+  df <- dplyr::bind_rows(df_agg_P2_C1,
+                         df_agg_P2_C2)
+  df$Batch <- c(rep(x = "P2_C1", times = nrow(agg_P2_C1)),
+                rep(x = "P2_C2", times = nrow(agg_P2_C2)))
+  df$File[df$Batch == "P2_C1"] <- df$File[df$Batch == "P2_C1"] 
+  df$File[df$Batch == "P2_C2"] <- df$File[df$Batch == "P2_C2"] + 12
+  df$Manual <- factor(df$Manual, levels = cellTypes)
+  df <- df[,c(markers, "Manual", "File", "Batch")]
+
+  # Plot
+  plotlist <- list()
+  for (marker in markers){
+    p <- ggplot(na.omit(df[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+      stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors) +
+      xlab(paste0(marker, " <", GetChannels(agg_P2_C1, markers = marker), ">")) +
+      xlim(c(-1,4)) +
+      theme_minimal() +
+      ylab(ifelse(TP == "before", "original", "normalized")) +
+      theme(plot.subtitle = element_text(hjust = 0.5),
+            axis.title.x=element_text(colour="#53B400"))#+
+      #theme(legend.direction = "horizontal") 
+    if (is.null(leg)){
+      leg <- get_legend(p)
+    }
+    if (TP == "before"){
+      p <- p + 
+        ggtitle(label = "", subtitle = "All B cells")
+      x_range <- layer_scales(p)$x$range$range
+    }
+    p <- p + theme(legend.position = "none")
+    plotlist[[length(plotlist) + 1]] <- p
+    
+    for (cellType in cellTypes[-c(1,2)]){
+      df_sub <- na.omit(df[df$Manual == cellType,c(marker, "File", "Batch")])
+      p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+        stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+        stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+        scale_color_manual(values = batch_colors) +
+        xlab(paste0(marker, " <", GetChannels(agg_P2_C1, markers = marker), ">")) +
+        theme_minimal() + 
+        theme(legend.position = "none") +
+        xlim(c(-1,4)) +
+        ylab("") +
+        theme(plot.subtitle = element_text(hjust = 0.5),
+              axis.title.x=element_text(colour="#53B400"))
+    if (TP == "before"){
+      p <- p + 
+        ggtitle(label = "", subtitle = cellType)
+    }
+    plotlist[[length(plotlist) + 1]] <- p
+  
+    }
+  }
+  p1_plotlist[[length(p1_plotlist)+1]] <- ggarrange(plotlist = plotlist, ncol = 7, nrow = 1)
+}
+
+p2 <- ggarrange(ggarrange(plotlist = p1_plotlist, ncol = 1, nrow = 2, heights = c(1.3, 1)), 
+                as_ggplot(leg), ncol = 2, nrow = 1, widths = c(10,1))
+
+```
+
+## EMD and MAD plot 3a
+```{r}
+for (subset in "Model3a"){
+  markerlevels <- NULL
+  plotlist <- list()
+  for (eval in names(EMD_scores)[3]){
+    # EMD plot
+    EMD_before <- EMD_scores[[eval]][[paste0(subset, "_before")]][-2,]
+    EMD_after <- EMD_scores[[eval]][[paste0(subset, "_after")]][-2,]
+    rownames(EMD_before)[1] <- "All B cells"
+    rownames(EMD_after)[1] <- "All B cells"
+    
+    EMD_df <- data.frame("before" = c(EMD_before),
+                         "after" = c(EMD_after),
+                         "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+    if (is.null(markerlevels)){
+      markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+    }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) +
+      xlim(0,max) + ylim(0,max) +
+#      geom_point(aes(color = worse)) +
+      geom_point(aes(color = marker, shape = celltype), size = 3) +
+#      scale_color_manual(values = c("black", "red"))+
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#      ggrepel::geom_text_repel(aes(label = feature),# color = worse), 
+#                               size = 2, max.overlaps = Inf) +
+      ggtitle(paste0("(i) ", subset, " ", eval, " EMD")) + 
+      labs(color = "Marker",
+           shape = "Cell type") +
+      theme_minimal() #+ 
+#      theme(#legend.position = "bottom", 
+#            legend.box="horizontal", 
+#            legend.margin=margin())#,
+#            legend.key.size = unit(1, 'cm'), 
+#        legend.title = element_text(size=16), 
+#        legend.text = element_text(size=12)) + 
+#      guides(size = FALSE, colour = guide_legend(override.aes = list(size=4)),
+#             shape = guide_legend(override.aes = list(size=4)))
+  
+  leg_emd <- get_legend(p_emd)
+
+  p_emd <- p_emd  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+  plotlist[[length(plotlist)+1]] <- p_emd    
+  }
+  
+  names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+  
+  # MAD plot
+  MAD_before <- MADs[[paste0(subset, "_before")]][["comparison"]][-2,]
+  MAD_after <- MADs[[paste0(subset, "_after")]][["comparison"]][-2,]
+  rownames(MAD_before)[1] <- "All B cells"
+  rownames(MAD_after)[1] <- "All B cells"
+
+  MAD_df <- data.frame("before" = c(MAD_before),
+                       "after" = c(MAD_after),
+                       "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_"))
+  MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels)
+  MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes)
+  max <- max(MAD_df[,1:2], na.rm = T)
+  MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25
+  MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature)
+  p_mad <- ggplot(MAD_df, aes(x = after, y = before)) + 
+      labs(color = "Marker",
+           shape = "Cell type") +
+    xlim(0,max) + ylim(0,max) +
+#    geom_point(aes(color = bad)) +
+    geom_point(aes(color = marker, shape = celltype), size = 3) +
+#    scale_color_manual(values = c("black", "red"))+
+    geom_abline() +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#    ggrepel::geom_text_repel(aes(label = feature, color = bad), 
+#                             size = 2, max.overlaps = Inf) +
+    ggtitle(paste0("(ii) ", subset, " MAD")) +
+    theme_minimal()
+
+  leg_mad <- get_legend(p_mad)
+
+  p_mad <- p_mad  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+
+  plotlist[[length(plotlist)+1]] <- p_mad
+}
+
+p3 <- plotlist[[1]]
+p4 <- as.ggplot(leg_emd)
+p5 <- plotlist[[2]]
+```
+
+## EMD and MAD plot 3b
+```{r}
+for (subset in "Model3b"){
+  markerlevels <- NULL
+  plotlist <- list()
+  for (eval in names(EMD_scores)[3]){
+    # EMD plot
+    EMD_before <- EMD_scores[[eval]][[paste0(subset, "_before")]][-2,]
+    EMD_after <- EMD_scores[[eval]][[paste0(subset, "_after")]][-2,]
+    rownames(EMD_before)[1] <- "All B cells"
+    rownames(EMD_after)[1] <- "All B cells"
+    
+    EMD_df <- data.frame("before" = c(EMD_before),
+                         "after" = c(EMD_after),
+                         "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+    if (is.null(markerlevels)){
+      markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+    }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) +
+      xlim(0,max) + ylim(0,max) +
+#      geom_point(aes(color = worse)) +
+      geom_point(aes(color = marker, shape = celltype), size = 3) +
+#      scale_color_manual(values = c("black", "red"))+
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#      ggrepel::geom_text_repel(aes(label = feature),# color = worse), 
+#                               size = 2, max.overlaps = Inf) +
+      ggtitle(paste0("(i) ", subset, " ", eval, " EMD")) +
+      theme_minimal() #+ 
+#      theme(#legend.position = "bottom", 
+#            legend.box="horizontal", 
+#            legend.margin=margin())#,
+#            legend.key.size = unit(1, 'cm'), 
+#        legend.title = element_text(size=16), 
+#        legend.text = element_text(size=12)) + 
+#      guides(size = FALSE, colour = guide_legend(override.aes = list(size=4)),
+#             shape = guide_legend(override.aes = list(size=4)))
+  
+  leg_emd <- get_legend(p_emd)
+
+  p_emd <- p_emd  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+  plotlist[[length(plotlist)+1]] <- p_emd    
+  }
+  
+  names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+  
+  # MAD plot
+  MAD_before <- MADs[[paste0(subset, "_before")]][["comparison"]][-2,]
+  MAD_after <- MADs[[paste0(subset, "_after")]][["comparison"]][-2,]
+  rownames(MAD_before)[1] <- "All B cells"
+  rownames(MAD_after)[1] <- "All B cells"
+
+  MAD_df <- data.frame("before" = c(MAD_before),
+                       "after" = c(MAD_after),
+                       "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_"))
+  MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels)
+  MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes)
+  max <- max(MAD_df[,1:2], na.rm = T)
+  MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25
+  MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature)
+  p_mad <- ggplot(MAD_df, aes(x = after, y = before)) +
+    xlim(0,max) + ylim(0,max) +
+#    geom_point(aes(color = bad)) +
+    geom_point(aes(color = marker, shape = celltype), size = 3) +
+#    scale_color_manual(values = c("black", "red"))+
+    geom_abline() +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#    ggrepel::geom_text_repel(aes(label = feature, color = bad), 
+#                             size = 2, max.overlaps = Inf) +
+    ggtitle(paste0("(ii) ", subset, " MAD")) +
+    theme_minimal()
+
+  leg_mad <- get_legend(p_mad)
+
+  p_mad <- p_mad  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+
+  plotlist[[length(plotlist)+1]] <- p_mad
+}
+
+p6 <- plotlist[[1]]
+p7 <- as.ggplot(leg_emd)
+p8 <- plotlist[[2]]
+```
+
+## Bring everything together
+```{r}
+pdf("Results/Figure5.pdf", width = 16, height = 18)
+p <- ggarrange(ggarrange(p3, p5, p4, NULL, nrow=1, widths = c(4, 4, 2, 1)),
+               ggarrange(NULL, p1, nrow = 1, widths = c(0.5,40)),
+               ggarrange(p6, p8, p7, NULL, nrow=1, widths = c(4, 4, 2, 1)),
+               ggarrange(NULL, p2, nrow = 1, widths = c(0.5,40)), labels = c("A", "B", "C", "D"), ncol = 1, heights = c(3, 2.5, 3, 2.5))
+print(p)
+
+# p <- ggarrange(ggarrange(p2, 
+#                          ggarrange(
+#                            ggarrange(p3, p4, p5, 
+#                                      nrow = 1, labels = c("B", ""), widths = c(3, 1.2, 3)), p6, 
+#                            ncol = 1, labels = c("", "C"), heights = c(1.5, 1)), 
+#                          nrow = 1, labels = c("A", ""), widths = c(1, 1.5)), ggarrange(NULL, p1, widths = c(0.2, 10)), 
+#                ncol = 1, labels = c("", "D"), heights = c(4, 2))
+#print(p)
+dev.off()
+```
+
+# Supplementary figure 1
+## EMDs plots
+```{r}
+subset <- "Model1"
+markerlevels <- NULL
+plotlist <- list()
+for (eval in names(EMD_scores)){
+  # EMD plot
+  EMD_before <- EMD_scores[[eval]][[paste0(subset, "_before")]][-2,]
+  EMD_after <- EMD_scores[[eval]][[paste0(subset, "_after")]][-2,]
+  rownames(EMD_before)[1] <- "All B cells"
+  rownames(EMD_after)[1] <- "All B cells"
+  
+  EMD_df <- data.frame("before" = c(EMD_before),
+                       "after" = c(EMD_after),
+                       "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+  if (is.null(markerlevels)){
+    markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+  }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) +
+      xlim(0,max) + ylim(0,max) +
+#      geom_point(aes(color = worse)) +
+      geom_point(aes(color = marker, shape = celltype), size = 3) +
+#      scale_color_manual(values = c("black", "red"))+
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#      ggrepel::geom_text_repel(aes(label = feature),# color = worse), 
+#                               size = 2, max.overlaps = Inf) +
+      ggtitle(paste0(subset, " ", eval, " EMD")) +
+      theme_minimal() +
+      xlab("normalized") +
+      ylab("original") #+ 
+#      theme(#legend.position = "bottom", 
+            #legend.box="horizontal", 
+#            legend.margin=margin(),
+#            legend.key.size = unit(1, 'cm'), 
+#        legend.title = element_text(size=14), 
+#        legend.text = element_text(size=10)) + 
+#      guides(size = FALSE, colour = guide_legend(override.aes = list(size=4)),
+#             shape = guide_legend(override.aes = list(size=4)))
+
+leg_emd <- get_legend(p_emd)
+
+p_emd <- p_emd  +
+    theme(legend.position = "none")
+plotlist[[length(plotlist)+1]] <- p_emd    
+}
+
+names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+
+p1 <- ggarrange(ggarrange(plotlist = plotlist, nrow = 1, labels = c("B", "C", "D")), as_ggplot(leg_emd), nrow = 1, widths = c(6,1.5))
+
+```
+
+## Heatmap plots
+```{r}
+plotlist <- list()
+subset <- "Model1"
+gaps <- c(12, 13, 14)
+population <- "Naive B cells"
+marker <- "IgM <BV605-A>"
+condition <- "_before"
+tmp_m <- EMDs[[paste0(subset, condition)]][["distances"]][[population]][[marker]]
+colnames(tmp_m) <- rownames(tmp_m) <- basename(colnames(tmp_m))
+plotlist[[length(plotlist)+1]] <- as.ggplot(pheatmap::pheatmap(mat = tmp_m, display_numbers = TRUE, 
+                        cluster_rows = FALSE, cluster_cols = FALSE, 
+                        breaks = seq(0,5,length.out=100), fontsize = ifelse(subset == "Model2", 5, 10),
+                        gaps_row = gaps, gaps_col = gaps,
+                        legend = FALSE))
+plotlist[[length(plotlist)]] <- plotlist[[length(plotlist)]] +
+  ggtitle(label = "original EMD distances", subtitle = "Model 1, naive B cells, IgM <BV605-A>") +
+        theme(plot.title = element_text(hjust = 0.35),
+              plot.subtitle = element_text(hjust = 0.35))
+
+condition <- "_after"
+tmp_m <- EMDs[[paste0(subset, condition)]][["distances"]][[population]][[marker]]
+colnames(tmp_m) <- rownames(tmp_m) <- basename(colnames(tmp_m))
+plotlist[[length(plotlist)+1]] <- as.ggplot(pheatmap::pheatmap(mat = tmp_m, display_numbers = TRUE, 
+                        cluster_rows = FALSE, cluster_cols = FALSE, 
+                        breaks = seq(0,5,length.out=100), fontsize = ifelse(subset == "Model2", 5, 10),
+                        gaps_row = gaps, gaps_col = gaps))
+plotlist[[length(plotlist)]] <- plotlist[[length(plotlist)]] +
+  ggtitle(label = "normalized EMD distances", subtitle = "Model 1, naive B cells, IgM <BV605-A>") +
+        theme(plot.title = element_text(hjust = 0.35),
+              plot.subtitle = element_text(hjust = 0.35))
+p2 <- ggarrange(plotlist = plotlist, nrow = 1)
+```
+
+## Bring everything together
+```{r}
+pdf("Results/SupplementaryFigure1.pdf", width = 16, height = 12)
+p <- ggarrange(p2, p1, labels = c("A", ""), ncol = 1, heights = c(4, 2))
+print(p)
+dev.off()
+```
+
+```{r}
+Plot2DScatters(fsom = model1_withoutControl$fsom, 
+               channelpairs = list(c("CD27", "CD38"),
+                                   c("IgM", "IgD")), 
+               metaclusters = 1:3, 
+               plotFile = "~/Desktop/2Dscatters.png")
+```
+
+# Additional small visuals
+## FlowSOM tree
+```{r}
+dir.create("Results/Figs")
+fsom <- FlowSOM(input = agg_P1_C1_norm, colsToUse = c("BV421-A","BB700-A","PE-Cy7-A"), xdim = 4, ydim = 4, nClus = 3, seed = 1)
+pdf("Results/Figs/FlowSOMTree.pdf", width = 4, height = 4)
+PlotStars(fsom = fsom, colorPalette = c("#e9ecef", "#dee2e6", "#ced4da"),
+#          backgroundValues = fsom$metaclustering, 
+#          backgroundColors = c("#DACBDC", "#DCD1CB", "#CEDCCB"), 
+          list_insteadof_ggarrange = TRUE)$"tree"
+dev.off()
+```
+
+## Splines
+```{r}
+p <- plotSplines(model = model3_cellStateMarkersP1, channels = "BV650-A", groupClusters = TRUE)
+pdf("Results/Figs/Splines.pdf", height = 5, width = 4)
+print(p$C2)
+dev.off()
+```
+
+## Densities
+```{r}
+p <- plotDensities(input = list("P2_C1" = files_P2_C1_norm,
+                                "P2_C2" = files_P2_C2_norm,
+                                "P2_C1_norm" = files_P2_C1_norm_norm,
+                                "P2_C2_norm" = files_P2_C2_norm_norm),
+                   channels = P2_cellStateChannels,
+                   colors = c("P2_C1"="#F8766D", "P2_C2"="#00BFC4"))
+
+pdf("Results/Figs/Densities.pdf", height = 5, width = 4)
+print(p$`BV711-A original`)
+dev.off()
+
+```
+
+## Waterfall plot
+```{r}
+testModel <- CytoNorm.train(files = flowSet(c(agg_P1_C1, agg_P2_C1, agg_P1_C2, agg_P2_C2)), 
+                            labels = c("P1_C1", "P2_C1", "P1_C2", "P2_C2"), 
+                            channels = cellTypeChannels, transformList = NULL, 
+                            outputDir = "Results/Figs")
+
+CVs <- testCV(fsom = testModel$fsom, cluster_values = 3:44)
+pdf("Results/Figs/Waterfall.pdf", height = 5, width = 4)
+PlotOverviewCV(fsom = testModel$fsom, cv_res = CVs, max_cv = 1)
+dev.off()
+
+```
+
+
+
+
+

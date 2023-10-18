@@ -1,0 +1,166 @@
+---
+title: "Model3_clusteringChannels"
+author: "Katrien Quintelier"
+date: "2023-06-20"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file()) # change wd from path dir to project dir for all chunks
+getwd()
+```
+
+# Load environment
+```{r}
+source("Environment.R")
+```
+
+Goal: Normalize cellStateMarkers of files_P1_C2 towards files_P1_C1 and those of files_P2_C2 towards files_P2_C1, using the cellTypeMarkers for clustering.
+
+# P1
+## Train model
+```{r}
+# List files (already normalized for cell type markers)
+files_P1_C1_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[1-4]_Panel1_TP..fcs", full.names = TRUE)
+files_P1_C2_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[5-8]_Panel1_TP..fcs", full.names = TRUE)
+
+# Train model
+model3_cellStateMarkersP1 <- CytoNorm.train(files = c(files_P1_C1_norm, files_P1_C2_norm),
+                                            labels = c(rep(x = "C1",
+                                                           times = length(files_P1_C1_norm)),
+                                                       rep(x = "C2",
+                                                           times = length(files_P1_C2_norm))),
+                                            channels = P1_cellStateChannels,
+                                            transformList = NULL,
+                                            seed = 1,
+                                            plot = TRUE,
+                                            verbose = TRUE,
+                                            normParams = list("goal" = "C1"),
+                                            FlowSOM.params = list(nCells = 1e+06, 
+                                                                  xdim = 7, ydim = 7, 
+                                                                  nClus = 3, 
+                                                                  scale = FALSE,
+                                                                  colsToUse = cellTypeChannels))
+saveRDS(object = model3_cellStateMarkersP1, file = "RDS/model3_cellStateMarkersP1.rds")
+```
+
+## Apply CytoNorm model
+```{r}
+CytoNorm.normalize(model = model3_cellStateMarkersP1,
+                   files = c(files_P1_C1_norm, files_P1_C2_norm),
+                   labels = c(rep(x = "C1",times = length(files_P1_C1_norm)),
+                              rep(x = "C2",times = length(files_P1_C2_norm))),
+                   transformList = NULL,
+                   verbose = TRUE,
+                   prefix = "",
+                   transformList.reverse = NULL, 
+                   outputDir = "Data/Normalized_cellState")
+```
+
+## Density plots
+```{r}
+# List files
+files_P1_C1_norm_norm <- list.files(path = "Data/Normalized_cellState", 
+                                    pattern = "ID[1-4]_Panel1_TP..fcs", full.names = TRUE)
+files_P1_C2_norm_norm <- list.files(path = "Data/Normalized_cellState", 
+                                    pattern = "ID[5-8]_Panel1_TP..fcs", full.names = TRUE)
+
+# Make plots
+p <- plotDensities(input = list("P1_C1" = files_P1_C1_norm,
+                                "P1_C2" = files_P1_C2_norm,
+                                "P1_C1_norm" = files_P1_C1_norm_norm,
+                                "P1_C2_norm" = files_P1_C2_norm_norm),
+                   channels = P1_cellStateChannels,
+                   colors = batch_colors, 
+                   model = model3_cellStateMarkersP1)
+
+# Save to pdf
+pdf("Results/Model3_densitiesP1.pdf", height = 4*length(P1_cellStateChannels), width = 3*(length(p)-1)/(2*length(P1_cellStateChannels)))
+p_ <- ggarrange(ggarrange(plotlist = p[1:length(p)-1], ncol = (length(p)-1)/(2*length(P1_cellStateChannels)), nrow = 2*length(P1_cellStateChannels)),
+                p$legend, nrow = 2, heights = c(10,1))
+print(p_)
+dev.off()
+```
+
+## Spline plots
+```{r}
+pdf("Results/Model3_splinesP1.pdf", height = 9, width = 12)
+plotSplines(model = model3_cellStateMarkersP1, channels = P1_cellStateChannels, groupClusters = TRUE)
+dev.off()
+```
+
+
+
+# P2
+## Train model
+```{r}
+# List files (already normalized for cell type markers)
+files_P2_C1_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[1-4]_Panel2_TP..fcs", full.names = TRUE)
+files_P2_C2_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[5-8]_Panel2_TP..fcs", full.names = TRUE)
+
+# Train model
+model3_cellStateMarkersP2 <- CytoNorm.train(files = c(files_P2_C1_norm, files_P2_C2_norm),
+                                            labels = c(rep(x = "C1",
+                                                           times = length(files_P2_C1_norm)),
+                                                       rep(x = "C2",
+                                                           times = length(files_P2_C2_norm))),
+                                            channels = P2_cellStateChannels,
+                                            transformList = NULL,
+                                            seed = 1,
+                                            plot = TRUE,
+                                            verbose = TRUE,
+                                            normParams = list("goal" = "C1"))
+saveRDS(object = model3_cellStateMarkersP2, file = "RDS/model3_cellStateMarkersP2.rds")
+```
+
+## Apply CytoNorm model
+```{r}
+# Normalize files
+CytoNorm.normalize(model = model3_cellStateMarkersP2,
+                   files = c(files_P2_C1_norm, files_P2_C2_norm),
+                   labels = c(rep(x = "C1",times = length(files_P2_C1_norm)),
+                              rep(x = "C2",times = length(files_P2_C2_norm))),
+                   transformList = NULL,
+                   verbose = TRUE,
+                   prefix = "",
+                   transformList.reverse = NULL, 
+                   outputDir = "Data/Normalized_cellState")
+```
+
+## Density plots
+```{r}
+# List files
+files_P2_C1_norm_norm <- list.files(path = "Data/Normalized_cellState", 
+                                    pattern = "ID[1-4]_Panel2_TP..fcs", full.names = TRUE)
+files_P2_C2_norm_norm <- list.files(path = "Data/Normalized_cellState", 
+                                    pattern = "ID[5-8]_Panel2_TP..fcs", full.names = TRUE)
+
+# Make plots
+p <- plotDensities(input = list("P2_C1" = files_P2_C1_norm,
+                                "P2_C2" = files_P2_C2_norm,
+                                "P2_C1_norm" = files_P2_C1_norm_norm,
+                                "P2_C2_norm" = files_P2_C2_norm_norm),
+                   channels = P2_cellStateChannels,
+                   colors = batch_colors, 
+                   model = model3_cellStateMarkersP1)
+
+# Save to pdf
+pdf("Results/Model3_densitiesP2.pdf", height = 4*length(P2_cellStateChannels), width = 3*(length(p)-1)/(2*length(P2_cellStateChannels)))
+p_ <- ggarrange(ggarrange(plotlist = p[1:length(p)-1], ncol = (length(p)-1)/(2*length(P2_cellStateChannels)), nrow = 2*length(P2_cellStateChannels)),
+                p$legend, nrow = 2, heights = c(10,1))
+print(p_)
+dev.off()
+```
+
+## Spline plots
+```{r}
+pdf("Results/Model3_splinesP2.pdf", height = 9, width = 12)
+plotSplines(model = model3_cellStateMarkersP2, channels = P1_cellStateChannels, groupClusters = TRUE)
+dev.off()
+```

@@ -1,0 +1,106 @@
+---
+title: "model1_noControls"
+author: "Katrien Quintelier"
+date: "2023-06-20"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file()) # change wd from path dir to project dir for all chunks
+getwd()
+```
+
+# Load environment
+```{r}
+source("Environment.R")
+```
+
+Goal: Normalize files_P1_C1 and files_P2_C1 using the cellTypeMarkers
+
+# Train model
+```{r}
+# Create aggregate fcs files that will be used as a proxi for a control file
+set.seed(1)
+agg_P1_C1 <- AggregateFlowFrames(fileNames = files_P1_C1,
+                                 cTotal = length(files_P1_C1)*10000) 
+agg_P2_C1 <- AggregateFlowFrames(fileNames = files_P2_C1,
+                                 cTotal = length(files_P2_C1)*10000)
+
+# Save aggregates
+write.FCS(agg_P1_C1, "Data/Preprocessed/Panel1/Cohort1/agg_P1_C1.fcs")
+write.FCS(agg_P2_C1, "Data/Preprocessed/Panel2/Cohort1/agg_P2_C1.fcs")
+
+
+# Train model
+model1_withoutControl <- CytoNorm.train(files = flowSet(agg_P1_C1, agg_P2_C1),
+                                        labels = c("P1", "P2"),
+                                        channels = cellTypeChannels,
+                                        transformList = NULL,
+                                        seed = 1,
+                                        verbose = TRUE,
+                                        plot = TRUE,
+                                        FlowSOM.params = list(nCells = 1e+06, 
+                                                              xdim = 7, ydim = 7, 
+                                                              nClus = 3, 
+                                                              scale = FALSE))
+saveRDS(object = model1_withoutControl, file = "RDS/model1_withoutControl.rds")
+```
+
+# Test the CVs
+```{r}
+# Evaluate the CVs
+CVs1 <- testCV(fsom = model1_withoutControl$fsom, cluster_values = 3:44)
+pdf("Results/Model1_overviewCV.pdf")
+PlotOverviewCV(fsom = model1_withoutControl$fsom, cv_res = CVs1,show_cv = 0.8, max_cv = 1.5)
+dev.off()
+```
+
+# Apply CytoNorm model
+```{r}
+# Normalize files
+CytoNorm.normalize(model = model1_withoutControl,
+                   files = c(files_P1_C1, files_P2_C1),
+                   labels = c(rep("P1", length(files_P1_C1)),
+                              rep("P2", length(files_P2_C1))),
+                   transformList = NULL,
+                   verbose = TRUE,
+                   prefix = "",
+                   transformList.reverse = NULL, 
+                   outputDir = "Data/Normalized_cellType")
+```
+
+# Density plots
+```{r}
+# List files
+files_P1_C1_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[1-4]_Panel1_TP..fcs", full.names = TRUE)
+files_P2_C1_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[1-4]_Panel2_TP..fcs", full.names = TRUE)
+
+# Make plots
+p <- plotDensities(input = list("P1_C1" = agg_P1_C1,
+                                "P2_C1" = agg_P2_C1,
+                                "P1_C1_norm" = files_P1_C1_norm,
+                                "P2_C1_norm" = files_P2_C1_norm),
+                   channels = cellTypeChannels,
+                   colors = batch_colors, 
+                   model = model1_withoutControl)
+
+# Save to pdf
+pdf("Results/Model1_densities.pdf", height = 4*length(cellTypeChannels), width = 3*(length(p)-1)/(2*length(cellTypeChannels)))
+p_ <- ggarrange(ggarrange(plotlist = p[1:length(p)-1], ncol = (length(p)-1)/(2*length(cellTypeChannels)), nrow = 2*length(cellTypeChannels)),
+                p$legend, nrow = 2, heights = c(10,1))
+print(p_)
+dev.off()
+```
+
+# Spline plots
+```{r}
+pdf("Results/Model1_splines.pdf", height = 9, width = 12)
+plotSplines(model = model1_withoutControl, channels = cellTypeChannels, groupClusters = TRUE)
+plotSplines(model = model1_withoutControl, channels = cellTypeChannels)
+dev.off()
+```
+

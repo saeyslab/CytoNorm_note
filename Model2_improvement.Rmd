@@ -1,0 +1,621 @@
+---
+title: "Model2_improvement"
+author: "Katrien Quintelier"
+date: "2023-06-09"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file()) # change wd from path dir to project dir for all chunks
+getwd()
+```
+
+# Copy existing FlowSOM model
+```{r}
+dir.create("tmp_manualFlowSOM")
+file.copy(from = "tmp/CytoNorm_FlowSOM.RDS", 
+          to = "tmp_manualFlowSOM/CytoNorm_FlowSOM.RDS")
+```
+
+# Modify FlowSOM clustering
+```{r}
+fsom <- readRDS("tmp_manualFlowSOM/CytoNorm_FlowSOM.RDS")
+fsom_tmp <- NewData(fsom = fsom,
+                    input = read.FCS("tmp/before/agg_P1_C1.fcs"))
+clustering <- GetClusters(fsom_tmp)
+
+df <- data.frame("clustering" = clustering, 
+                 "manual" = manual_agg[["agg_P1_C1"]])
+counts <- table(df)
+
+labels <- colnames(counts)[apply(counts,1,which.max)]
+
+fsom <- UpdateMetaclusters(fsom = fsom, clusterAssignment = labels)
+
+saveRDS(fsom, "tmp_manualFlowSOM/CytoNorm_FlowSOM.RDS")
+```
+
+# New model 1
+```{r}
+# Train model
+manual_model1_withoutControl <- CytoNorm.train(files = flowSet(agg_P1_C1, agg_P2_C1),
+                                               labels = c("P1", "P2"),
+                                               outputDir = "tmp_manualFlowSOM",
+                                               channels = cellTypeChannels,
+                                               transformList = NULL,
+                                               seed = 1,
+                                               verbose = TRUE,
+                                               plot = TRUE,
+                                               FlowSOM.params = list(nCells = 1e+06, 
+                                                                     xdim = 7, ydim = 7, 
+                                                                     nClus = 3, 
+                                                                     scale = FALSE))
+
+# Normalize files
+CytoNorm.normalize(model = manual_model1_withoutControl,
+                   files = c(files_P1_C1, files_P2_C1),
+                   labels = c(rep("P1", length(files_P1_C1)),
+                              rep("P2", length(files_P2_C1))),
+                   transformList = NULL,
+                   verbose = TRUE,
+                   prefix = "",
+                   transformList.reverse = NULL, 
+                   outputDir = "Data/Normalized_cellType_manualFlowSOM")
+```
+
+# New model 2
+```{r}
+# Extract goal distribution
+goal_q <- CytoNorm:::getCytoNormQuantiles(manual_model1_withoutControl)
+
+# Train model
+manual_model2_towardsDistribution <- CytoNorm.train(files = c(files_P1_C2, files_P2_C2),
+                                                    labels = c(rep(x = "P1",times = length(files_P1_C2)),
+                                                               rep(x = "P2",times = length(files_P2_C2))),
+                                                    outputDir = "tmp_manualFlowSOM",
+                                                    channels = cellTypeChannels,
+                                                    transformList = NULL,
+                                                    seed = 1,
+                                                    plot = TRUE,
+                                                    verbose = TRUE,
+                                                    normParams = list("goal" = goal_q))
+
+# Normalize files
+CytoNorm.normalize(model = manual_model2_towardsDistribution,
+                   files = c(files_P1_C2, files_P2_C2),
+                   labels = c(rep(x = "P1",times = length(files_P1_C2)),
+                              rep(x = "P2",times = length(files_P2_C2))),
+                   transformList = NULL,
+                   verbose = TRUE,
+                   prefix = "",
+                   transformList.reverse = NULL, 
+                   outputDir = "Data/Normalized_cellType_manualFlowSOM")
+```
+
+# Evaluation
+## Make aggregates (same cells as previous aggregates)
+```{r}
+dir.create("tmp_manualFlowSOM/after")
+aggregates <- list("agg_P1_C1" = files_P1_C1,
+                   "agg_P1_C2" = files_P1_C2,
+                   "agg_P2_C1" = files_P2_C1,
+                   "agg_P2_C2" = files_P2_C2)
+
+for (agg in names(aggregates)){
+  writeLines(agg)
+  files <- aggregates[[agg]]
+  set.seed(2023)
+  before <- read.FCS(paste0("tmp/before/", agg, ".fcs"))
+
+  after <- before
+  
+  manual <- c()
+  for (i_file in unique(before@exprs[,"File"])){
+    ff <- read.FCS(paste0("Data/Normalized_cellType_manualFlowSOM/", basename(aggregates[[agg]][i_file])))
+    i_IDs <- before@exprs[before@exprs[,"File"] == i_file,"Original_ID2"]
+    after@exprs[before@exprs[,"File"] == i_file,1:(ncol(after@exprs)-3)] <- ff@exprs[i_IDs, ]
+  }    
+  write.FCS(after, paste0("tmp_manualFlowSOM/after/", agg, ".fcs"))
+}
+```
+
+## Define cell types of interest
+```{r}
+cellTypes <- c("unlabeled",
+               "All B cells",
+               "Transitional B cells",
+               "Naive B cells",
+               "IgD+ memory B cells",
+               "IgM+ memory B cells", 
+               "Class switched memory B cells", 
+               "Double negative B cells")
+
+files_P1_C1_norm_manualFlowSOM <- list.files(path = "Data/Normalized_cellType_manualFlowSOM/", 
+                                             pattern = "ID[1-4]_Panel1_TP..fcs", full.names = TRUE)
+files_P2_C1_norm_manualFlowSOM <- list.files(path = "Data/Normalized_cellType_manualFlowSOM/", 
+                                             pattern = "ID[1-4]_Panel2_TP..fcs", full.names = TRUE)
+files_P1_C2_norm_manualFlowSOM <- list.files(path = "Data/Normalized_cellType_manualFlowSOM/", 
+                                             pattern = "ID[5-8]_Panel1_TP..fcs", full.names = TRUE)
+files_P2_C2_norm_manualFlowSOM <- list.files(path = "Data/Normalized_cellType_manualFlowSOM/", 
+                                             pattern = "ID[5-8]_Panel2_TP..fcs", full.names = TRUE)
+
+metrics <- list("Model1_before" = list("files" = c(files_P1_C1, "tmp/before/agg_P1_C1.fcs", 
+                                                   "tmp/before/agg_P2_C1.fcs", files_P2_C1),
+                                       "channels" = cellTypeChannels),
+                "Model1_after" = list("files" = c(files_P1_C1_norm_manualFlowSOM, "tmp_manualFlowSOM/after/agg_P1_C1.fcs", 
+                                                  "tmp_manualFlowSOM/after/agg_P2_C1.fcs", files_P2_C1_norm_manualFlowSOM),
+                                       "channels" = cellTypeChannels),
+                "Model2_before" = list("files" = c(files_P1_C1_norm_manualFlowSOM, files_P2_C1_norm_manualFlowSOM, "tmp_manualFlowSOM/after/agg_P1_C1.fcs", "tmp/after/agg_P2_C1.fcs",
+                                                   "tmp/before/agg_P1_C2.fcs", "tmp/before/agg_P2_C2.fcs", files_P1_C2, files_P2_C2),
+                                       "channels" = cellTypeChannels),
+                "Model2_after" = list("files" = c(files_P1_C1_norm_manualFlowSOM, files_P2_C1_norm_manualFlowSOM, "tmp_manualFlowSOM/after/agg_P1_C1.fcs", "tmp_manualFlowSOM/after/agg_P2_C1.fcs",
+                                                  "tmp_manualFlowSOM/after/agg_P1_C2.fcs", "tmp_manualFlowSOM/after/agg_P2_C2.fcs", files_P1_C2_norm_manualFlowSOM, files_P2_C2_norm_manualFlowSOM),
+                                       "channels" = cellTypeChannels))
+```
+
+## Calculate EMD and MAD
+```{r}
+EMDs_manualFlowSOM <- list()
+MADs_manualFlowSOM <- list()
+for (model in names(metrics)){
+  print(model)
+  files <- metrics[[model]][["files"]]
+  channels <- metrics[[model]][["channels"]]
+  
+  EMDs_manualFlowSOM[[model]] <- emdEvaluation(files = files,
+                                 channels = channels,
+                                 manual = manualList, return_all = TRUE, manualThreshold = 20)
+  MADs_manualFlowSOM[[model]] <- CytoNorm:::madEvaluation(files = files[!startsWith(files, "tmp")], 
+                                 channels = channels, return_all = TRUE,
+                                 manual = manualList, transformList = NULL)
+}
+```
+
+### Third approach: based on aggregates
+```{r}
+EMD_scores_manualFlowSOM <- list()
+EMD_scores_manualFlowSOM[["aggregates"]] <- list()
+
+# M1
+for (subset in names(EMDs_manualFlowSOM)[1:2]){
+  dist <- EMDs_manualFlowSOM[[subset]]$distances
+  EMD_scores_manualFlowSOM[["aggregates"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        EMD_scores_manualFlowSOM[["aggregates"]][[subset]][cellType, marker] <- dist[[cellType]][[marker]][13, 14]
+      }
+  }
+}
+
+# M2
+for (subset in names(EMDs_manualFlowSOM)[3:4]){
+  dist <- EMDs_manualFlowSOM[[subset]]$distances
+  EMD_scores_manualFlowSOM[["aggregates"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        EMD_scores_manualFlowSOM[["aggregates"]][[subset]][cellType, marker] <- max(dist[[cellType]][[marker]][25:26, 27:28], na.rm = T)
+      }
+  }
+}
+```
+
+<!-- # Make figures -->
+<!-- ```{r} -->
+<!-- pdf("Results/Metrics_manualFlowSOM.pdf", width = 9, height = 4) -->
+<!-- print(ggplot() + theme_void()) -->
+<!-- for (subset in unique(sub("_.*", "", names(EMD_scores_manualFlowSOM[[1]])))){ -->
+<!--   markerlevels <- NULL -->
+<!--   plotlist <- list() -->
+<!--   for (eval in names(EMD_scores_manualFlowSOM)){ -->
+<!--     # EMD plot -->
+<!--     EMD_before <- EMD_scores_manualFlowSOM[[eval]][[paste0(subset, "_before")]][2:length(cellTypes),] -->
+<!--     EMD_after <- EMD_scores_manualFlowSOM[[eval]][[paste0(subset, "_after")]][2:length(cellTypes),] -->
+
+<!--     EMD_df <- data.frame("before" = c(EMD_before), -->
+<!--                          "after" = c(EMD_after), -->
+<!--                          "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_")) -->
+<!--     if (is.null(markerlevels)){ -->
+<!--       markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature))) -->
+<!--     } -->
+<!--     EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels) -->
+<!--     EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes) -->
+<!--     max <- max(EMD_df[,1:2], na.rm = T) -->
+<!--     EMD_df$worse <- EMD_df$before - EMD_df$after < 0 -->
+<!--     EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature) -->
+<!--     p_emd <- ggplot(EMD_df, aes(x = after, y = before)) + -->
+<!--       xlim(0,max) + ylim(0,max) + -->
+<!-- #      geom_point(aes(color = worse)) + -->
+<!--       geom_point(aes(color = marker, shape = celltype)) + -->
+<!-- #      scale_color_manual(values = c("black", "red"))+ -->
+<!--       geom_abline() + -->
+<!--       scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) + -->
+<!-- #      ggrepel::geom_text_repel(aes(label = feature),# color = worse),  -->
+<!-- #                               size = 2, max.overlaps = Inf) + -->
+<!--       ggtitle(paste0(subset, " ", eval, " EMD")) + -->
+<!--       theme_minimal() -->
+
+<!--   leg_emd <- get_legend(p_emd) -->
+
+<!--   p_emd <- p_emd  + -->
+<!--       theme(legend.position = "none") -->
+<!--   plotlist[[length(plotlist)+1]] <- p_emd     -->
+<!--   } -->
+
+<!--   names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels) -->
+
+<!--   # MAD plot -->
+<!--   MAD_before <- MADs_manualFlowSOM[[paste0(subset, "_before")]][["comparison"]][-1,] -->
+<!--   MAD_after <- MADs_manualFlowSOM[[paste0(subset, "_after")]][["comparison"]][-1,] -->
+<!--   MAD_df <- data.frame("before" = c(MAD_before), -->
+<!--                        "after" = c(MAD_after), -->
+<!--                        "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_")) -->
+<!--   MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels) -->
+<!--   MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes) -->
+<!--   max <- max(MAD_df[,1:2], na.rm = T) -->
+<!--   MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25 -->
+<!--   MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature) -->
+<!--   p_mad <- ggplot(MAD_df, aes(x = after, y = before)) + -->
+<!--     xlim(0,max) + ylim(0,max) + -->
+<!-- #    geom_point(aes(color = bad)) + -->
+<!--     geom_point(aes(color = marker, shape = celltype)) + -->
+<!-- #    scale_color_manual(values = c("black", "red"))+ -->
+<!--     geom_abline() + -->
+<!--     scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) + -->
+<!-- #    ggrepel::geom_text_repel(aes(label = feature, color = bad),  -->
+<!-- #                             size = 2, max.overlaps = Inf) + -->
+<!--     ggtitle(paste0(subset, " MAD")) + -->
+<!--     theme_minimal() -->
+
+<!--   leg_mad <- get_legend(p_mad) -->
+
+<!--   p_mad <- p_mad  + -->
+<!--       theme(legend.position = "none") -->
+
+<!--   plotlist[[length(plotlist)+1]] <- p_mad -->
+
+<!--   print(ggarrange(ggarrange(plotlist = plotlist), -->
+<!--                   as_ggplot(leg_emd), ncol=2, widths = c(4,1.5))) -->
+<!-- } -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+<!-- # Heatmap plots -->
+<!-- ```{r} -->
+<!-- pdf("Results/distanceHeatmaps_manualFlowSOm.pdf") -->
+<!-- print(ggplot() + theme_void()) -->
+<!-- for (subset in unique(sub("_.*", "", names(EMDs_manualFlowSOM)))){ -->
+<!--   gaps <- c(12, 13, 14) -->
+<!--   if (subset == "Model2"){ -->
+<!--     gaps <- c(12, 24, 25, 26, 27, 28, 40) -->
+<!--   } -->
+<!--   for (population in names(EMDs_manualFlowSOM[[paste0(subset, "_before")]][["distances"]])[2:length(names(EMDs[[paste0(subset, "_before")]][["distances"]]))]){ -->
+<!--     for (marker in names(EMDs_manualFlowSOM[[paste0(subset, "_before")]][["distances"]][[population]])){ -->
+<!--       for (condition in c("_before", "_after")){ -->
+<!--         tmp_m <- EMDs_manualFlowSOM[[paste0(subset, condition)]][["distances"]][[population]][[marker]] -->
+<!--         colnames(tmp_m) <- rownames(tmp_m) <- basename(colnames(tmp_m)) -->
+<!--         p <- pheatmap::pheatmap(mat = tmp_m, display_numbers = TRUE,  -->
+<!--                                 cluster_rows = FALSE, cluster_cols = FALSE,  -->
+<!--                                 breaks = seq(0,10,length.out=100), fontsize = ifelse(subset == "Model2", 5, 7), -->
+<!--                                 gaps_row = gaps, gaps_col = gaps, -->
+<!--                                 main = paste0(subset, condition, "\n ", population, "_", marker)) -->
+<!--         print(p) -->
+<!--       } -->
+<!--     } -->
+<!--   } -->
+<!-- } -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+
+
+
+
+
+# Supplementary figure 3: Results plot for manual model 2
+## Density plots
+```{r}
+p1_plotlist <- list()
+leg <- NULL
+for (TP in c("before", "after")){
+  # Read in aggregates
+  agg_P1_C1 <- read.FCS(paste0("tmp/after/agg_P1_C1.fcs"))
+  agg_P1_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P1_C2.fcs"))
+  agg_P2_C1 <- read.FCS(paste0("tmp/after/agg_P2_C1.fcs"))
+  agg_P2_C2 <- read.FCS(paste0("tmp/", TP, "/agg_P2_C2.fcs"))
+  
+  if (TP == "after"){
+  agg_P1_C2 <- read.FCS(paste0("tmp_manualFlowSOM/", TP, "/agg_P1_C2.fcs"))
+  agg_P2_C2 <- read.FCS(paste0("tmp_manualFlowSOM/", TP, "/agg_P2_C2.fcs"))
+  }
+  # Colnames
+  df_agg_P1_C1 <- data.frame(exprs(agg_P1_C1), check.names = FALSE)
+  colnames(df_agg_P1_C1) <- GetMarkers(agg_P1_C1, channels = colnames(df_agg_P1_C1))
+  df_agg_P1_C1$Manual <- manual_agg[["agg_P1_C1"]]
+  
+  df_agg_P1_C2 <- data.frame(exprs(agg_P1_C2), check.names = FALSE)
+  colnames(df_agg_P1_C2) <- GetMarkers(agg_P1_C2, channels = colnames(df_agg_P1_C2))
+  df_agg_P1_C2$Manual <- manual_agg[["agg_P1_C2"]]
+  
+  df_agg_P2_C1 <- data.frame(exprs(agg_P2_C1), check.names = FALSE)
+  colnames(df_agg_P2_C1) <- GetMarkers(agg_P2_C1, channels = colnames(df_agg_P2_C1))
+  df_agg_P2_C1$Manual <- manual_agg[["agg_P2_C1"]]
+  
+  df_agg_P2_C2 <- data.frame(exprs(agg_P2_C2), check.names = FALSE)
+  colnames(df_agg_P2_C2) <- GetMarkers(agg_P2_C2, channels = colnames(df_agg_P2_C2))
+  colnames(df_agg_P2_C2)[which(colnames(df_agg_P2_C2) == "CD268 (BAFFR)")] <- "CD268"
+  df_agg_P2_C2$Manual <- manual_agg[["agg_P2_C2"]]
+  
+  # Make data frame
+  markers <- c("IgM", "CD27")
+  names <-unique(c(paste0(cellTypeMarkers, " <", cellTypeChannels, ">"), 
+                   paste0(P1_cellStateMarkers, " <", P1_cellStateChannels, ">"), 
+                   paste0(P2_cellStateMarkers, " <", P2_cellStateChannels, ">")))
+  
+  df <- dplyr::bind_rows(df_agg_P1_C1,
+                         df_agg_P1_C2,
+                         df_agg_P2_C1,
+                         df_agg_P2_C2)
+  df$Batch <- c(rep(x = "P1_C1", times = nrow(agg_P1_C1)),
+                rep(x = "P1_C2", times = nrow(agg_P1_C2)),
+                rep(x = "P2_C1", times = nrow(agg_P2_C1)),
+                rep(x = "P2_C2", times = nrow(agg_P2_C2)))
+  df$File[df$Batch == "P1_C2"] <- df$File[df$Batch == "P1_C2"] + 12
+  df$File[df$Batch == "P2_C1"] <- df$File[df$Batch == "P2_C1"] + 24
+  df$File[df$Batch == "P2_C2"] <- df$File[df$Batch == "P2_C2"] + 36
+  df$Manual <- factor(df$Manual, levels = cellTypes)
+  df <- df[,c(markers, "Manual", "File", "Batch")]
+
+  # Plot
+  for (marker in markers){
+  plotlist <- list()
+    p <- ggplot(na.omit(df[,c(marker, "File", "Batch")]), aes(x=!!sym(marker), color = Batch)) +
+      stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+      stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+      scale_color_manual(values = batch_colors)+
+      xlim(c(-1,5)) +
+      xlab(paste0(marker, " <", GetChannels(agg_P1_C1, marker), ">")) +
+      theme_minimal() +
+      ylab(ifelse(TP == "before", "original", "normalized"))#+
+      #theme(legend.direction = "horizontal") 
+    if (is.null(leg)){
+      leg <- get_legend(p)
+    }
+    if (TP == "before" & marker == markers[1]){
+      p <- p + ggtitle(label = "", subtitle = "All B cells")
+    } 
+    x_range <- layer_scales(p)$x$range$range
+    p <- p + theme(legend.position = "none") +
+       theme(axis.title.x=element_text(colour=ifelse(marker == "CD27", "#F8766D", "#C77CFF"))) 
+    plotlist[[length(plotlist) + 1]] <- p
+    
+    for (cellType in cellTypes[-c(1,2)]){
+      df_sub <- na.omit(df[df$Manual == cellType,c(marker, "File", "Batch")])
+      p <- ggplot(df_sub, aes(x=!!sym(marker), color = Batch)) +
+        stat_density(aes(group = File), geom = "line", position = "identity", alpha = 0.2)+
+        stat_density(geom = "line", position = "identity", linewidth = 0.7) +
+        scale_color_manual(values = batch_colors) +
+        xlab(paste0(marker, " <", GetChannels(agg_P1_C1, marker), ">")) +
+        theme_minimal() + 
+        theme(legend.position = "none") +
+        xlim(c(-1,5)) +
+        ylab("") +
+       theme(axis.title.x=element_text(colour=ifelse(marker == "CD27", "#F8766D", "#C77CFF"))) 
+    if (TP == "before" & marker == markers[1]){
+      p <- p + ggtitle(label = "", subtitle = cellType)  +
+        theme(plot.subtitle = element_text(hjust = 0.5))
+      }
+      plotlist[[length(plotlist) + 1]] <- p
+  
+    }
+  p1_plotlist[[length(p1_plotlist)+1]] <- ggarrange(plotlist = plotlist, ncol = 7, nrow = 1)
+  }
+}
+
+p1_plotlist[[length(p1_plotlist)+1]] <- NULL
+
+p1 <- ggarrange(ggarrange(plotlist = c(p1_plotlist[1], p1_plotlist[3], p1_plotlist[5], p1_plotlist[2], p1_plotlist[4]), ncol = 1, nrow = 5, heights = c(2.6, 2, 0.3, 2, 2)), 
+                as_ggplot(leg), ncol = 2, nrow = 1, widths = c(10,1))
+```
+
+## EMD and MAD plot
+```{r}
+for (subset in "Model2"){
+  markerlevels <- NULL
+  plotlist <- list()
+  for (eval in names(EMD_scores_manualFlowSOM)[1]){
+    # EMD plot
+    EMD_before <- EMD_scores_manualFlowSOM[[eval]][[paste0(subset, "_before")]][-2,]
+    EMD_after <- EMD_scores_manualFlowSOM[[eval]][[paste0(subset, "_after")]][-2,]
+    rownames(EMD_before)[1] <- "All B cells"
+    rownames(EMD_after)[1] <- "All B cells"
+    
+    EMD_df <- data.frame("before" = c(EMD_before),
+                         "after" = c(EMD_after),
+                         "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+    if (is.null(markerlevels)){
+      markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+    }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) +
+      xlim(0,max) + ylim(0,max) +
+#      geom_point(aes(color = worse)) +
+      geom_point(aes(color = marker, shape = celltype), size = 3) +#, size = 0.6)) +
+#      scale_color_manual(values = c("black", "red"))+
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#      ggrepel::geom_text_repel(aes(label = feature),# color = worse), 
+#                               size = 2, max.overlaps = Inf) +
+      ggtitle(paste0("(i) ", subset, " ", eval, " EMD")) +
+      theme_minimal() + 
+      labs(color = "Marker",
+           shape = "Cell type") +
+      theme(legend.position = "bottom", 
+            legend.box="vertical")#, 
+#            legend.margin=margin(),
+#            legend.key.size = unit(1, 'cm'), 
+#        legend.title = element_text(size=16), 
+#        legend.text = element_text(size=12)) #+ 
+#      guides(size = FALSE, colour = guide_legend(override.aes = list(size=4)),
+#             shape = guide_legend(override.aes = list(size=4)))
+  leg_emd <- get_legend(p_emd)
+
+  p_emd <- p_emd  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+  plotlist[[length(plotlist)+1]] <- p_emd    
+  }
+  
+  names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+  
+  # MAD plot
+  MAD_before <- MADs_manualFlowSOM[[paste0(subset, "_before")]][["comparison"]][-2,]
+  MAD_after <- MADs_manualFlowSOM[[paste0(subset, "_after")]][["comparison"]][-2,]
+  rownames(MAD_before)[1] <- "All B cells"
+  rownames(MAD_after)[1] <- "All B cells"
+
+  MAD_df <- data.frame("before" = c(MAD_before),
+                       "after" = c(MAD_after),
+                       "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_"))
+  MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels)
+  MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes)
+  max <- max(MAD_df[,1:2], na.rm = T)
+  MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25
+  MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature)
+  p_mad <- ggplot(MAD_df, aes(x = after, y = before)) +
+    xlim(0,max) + ylim(0,max) +
+#    geom_point(aes(color = bad)) +
+    geom_point(aes(color = marker, shape = celltype), size = 3) +#, size = 0.6)) +
+#    scale_color_manual(values = c("black", "red"))+
+    geom_abline() +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+#    ggrepel::geom_text_repel(aes(label = feature, color = bad), 
+#                             size = 2, max.overlaps = Inf) +
+    ggtitle(paste0("(ii) ", subset, " MAD")) +
+    theme_minimal()
+
+  leg_mad <- get_legend(p_mad)
+
+  p_mad <- p_mad  +
+      theme(legend.position = "none") +
+      xlab("normalized") +
+      ylab("original")
+
+  plotlist[[length(plotlist)+1]] <- p_mad
+}
+
+p2 <- plotlist[[1]]
+p3 <- as.ggplot(leg_emd)
+p4 <- plotlist[[2]]
+```
+
+## Aggregates contribution plot: barplot with cell type composition per aggregate file
+```{r}
+agg_name <- c()
+man_labels <- c()
+clustering <- c()
+
+agg_objects <- c(agg_P1_C1, agg_P2_C1, agg_P1_C2, agg_P2_C2)
+agg_names <- c("agg_P1_C1", "agg_P2_C1", "agg_P1_C2", "agg_P2_C2")
+for (i in 1:length(agg_objects)){
+  agg_name <- c(agg_name, rep(agg_names[i], nrow(agg_objects[[i]])))
+  man_labels <- c(man_labels, as.character(manual_agg[[agg_names[i]]]))
+  fsom_tmp <- NewData(manual_model1_withoutControl$fsom, agg_objects[[i]])
+  clustering <- c(clustering, paste0("Cluster ", GetMetaclusters(fsom_tmp)))
+}
+
+df <- data.frame("Batch aggregate" = agg_name,
+                 "Cell type" = man_labels,
+                 "FlowSOM cluster" = clustering,
+                 check.names = FALSE)
+
+df <- data.frame(data.table::setDT(df)[,list(Contribution=.N),names(df)], check.names = FALSE)
+
+df$`Batch aggregate` <- factor(df$`Batch aggregate`, 
+                               levels = c("agg_P1_C1", "agg_P2_C1", "agg_P1_C2", "agg_P2_C2"))
+df$`Cell type` <- factor(df$`Cell type`,
+                         levels = c("Transitional B cells", "Naive B cells", 
+                                    "IgD+ memory B cells", "IgM+ memory B cells", 
+                                    "Class switched memory B cells", 
+                                    "Double negative B cells", "unlabeled"))
+df$`FlowSOM cluster` <- factor(df$`FlowSOM cluster`,
+                               levels = paste0("Cluster ", 
+                                               c("Transitional B cells", "Naive B cells", 
+                                                 "IgD+ memory B cells", "IgM+ memory B cells", 
+                                                 "Class switched memory B cells", 
+                                                 "Double negative B cells", "unlabeled")))
+levels(df$`FlowSOM cluster`) <- c("Cluster \n Transitional \n B cells", 
+                                  "Cluster \n Naive \n B cells", 
+                                  "Cluster \n IgD+ memory \n B cells", 
+                                  "Cluster \n IgM+ memory \n B cells", 
+                                  "Cluster \n Class switched \n memory B cells", 
+                                  "Cluster \n Double negative \n B cells", 
+                                  "Cluster \n unlabeled")
+
+plotlist <- list()
+i <- 1
+
+# leg <- get_legend(ggplot(data = df, 
+#                          aes(x = `Batch aggregate`, y = Contribution, fill = `Cell type`)) +
+#                     geom_bar(position="fill", stat="identity") +
+#                     scale_fill_manual(values = c("#fbf8cc", "#ffcfd2", "#b9fbc0", "#a3c4f3", "#cfbaf0", "#8eecf5", "#edede9")) +
+#                     facet_wrap(~`FlowSOM cluster`,nrow=1))
+
+#for (cluster in levels(df$`FlowSOM cluster`)){
+  plotlist[[length(plotlist)+1]] <-  ggplot(data = df, aes(x = `Batch aggregate`, y = Contribution, fill = `Cell type`)) +
+  geom_bar(position="fill", stat="identity") +
+  scale_fill_manual(values = c("#fbf8cc", "#ffcfd2", "#b9fbc0", "#a3c4f3", "#cfbaf0", "#8eecf5", "#edede9")) +
+  facet_wrap(~`FlowSOM cluster`,nrow=1) +
+  xlab("") + ylab("Composition") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.2,
+                                   colour = c("#900002", "#0046A1", 
+                                              "#FF3437", "#6FCFFF")),
+        axis.ticks = element_blank())+ 
+    theme(strip.text.x = element_text(size = 8))#+
+   # ggtitle(label = "", subtitle = cluster)  #+
+    #theme(legend.title = element_text(size=16), 
+    #      legend.text = element_text(size=12))
+
+  # if (cluster != "Cluster Transitional B cells"){
+  #   plotlist[[length(plotlist)]] <- plotlist[[length(plotlist)]] +
+  #     theme(axis.title.y=element_blank(),
+  #       axis.text.y=element_blank(),
+  #       axis.ticks.y=element_blank())
+  # }
+  # plotlist[[length(plotlist)]] <- plotlist[[length(plotlist)]] +
+  #     theme(legend.position = "none")
+  
+  i <- i + 1
+#}
+#plotlist[[length(plotlist)+1]] <- as_ggplot(leg)
+#p5 <- ggarrange(plotlist = plotlist, nrow = 1, widths = c(2.85, 2, 2, 2, 2, 2, 4.4))
+  p5 <- plotlist[[length(plotlist)]]
+```
+
+
+## Bring everything together
+```{r}
+pdf("Results/SupplementaryFigure4.pdf", width = 16, height = 14)
+p <- ggarrange(ggarrange(ggarrange(
+                           ggarrange(p2,p4, 
+                                     nrow = 1, labels = c("A", "")),p3, NULL, 
+                           ncol = 1, heights = c(3, 0.5, 0.1)), p5, 
+                         nrow = 1, labels = c("", "B"), widths = c(2,2)), ggarrange(NULL, p1, nrow = 1, widths = c(0.5,40)), 
+               ncol = 1, labels = c("", "C"), heights = c(3.5,5))
+print(p)
+dev.off()
+```

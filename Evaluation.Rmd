@@ -1,0 +1,397 @@
+---
+title: "Evaluation"
+author: "Katrien Quintelier"
+date: "2023-05-04"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file()) # change wd from path dir to project dir for all chunks
+getwd()
+```
+
+# Get metrics
+## Make aggregates and get aggregate manual labels
+```{r}
+dir.create("tmp/before")
+dir.create("tmp/after")
+manual_agg <- list()
+
+aggregates <- list("agg_P1_C1" = files_P1_C1,
+                   "agg_P1_C2" = files_P1_C2,
+                   "agg_P2_C1" = files_P2_C1,
+                   "agg_P2_C2" = files_P2_C2)
+
+dictionary <- c("Unlabeled" = "unlabeled",
+                "Trans" = "Transitional B cells",
+                "Q1: CD27- , IgD+ (naive B)" = "Naive B cells",
+                "Q2: CD27+ , IgD+ (mem)" = "IgD+ memory B cells",
+                "CD27, IgM+ (mem)" = "IgM+ memory B cells", 
+                "CD27, IgM- (class switched mem)" = "Class switched memory B cells", 
+                "Q4: CD27- , IgD-" = "Double negative B cells")
+
+for (agg in names(aggregates)){
+  writeLines(agg)
+  files <- aggregates[[agg]]
+  set.seed(2023)
+  before <- AggregateFlowFrames(fileNames = files, silent = TRUE,
+                                cTotal = length(files) * 10000)
+
+  write.FCS(before, paste0("tmp/before/", agg, ".fcs"))  
+  after <- before
+  
+  manual <- c()
+  for (i_file in unique(before@exprs[,"File"])){
+    ff <- read.FCS(paste0("Data/Normalized_cellState/", basename(aggregates[[agg]][i_file])))
+    i_IDs <- before@exprs[before@exprs[,"File"] == i_file,"Original_ID2"]
+    after@exprs[before@exprs[,"File"] == i_file,1:(ncol(after@exprs)-3)] <- ff@exprs[i_IDs, ]
+    labels <- readRDS(paste0("Data/Raw/ManualLabels/", sub(".fcs", ".rds", basename(aggregates[[agg]][i_file]))))
+    manual <- c(manual, labels[i_IDs])
+  }    
+  
+  manual_agg[[agg]] <- factor(unname(dictionary[manual]), 
+                             levels = unname(dictionary))
+  write.FCS(after, paste0("tmp/after/", agg, ".fcs"))
+}
+```
+
+## Get manual labels
+```{r}
+manualList <- manual_agg
+names(manualList) <- paste0(names(manual_agg), ".fcs")
+
+for (agg in names(aggregates)){
+  for (manualFile in basename(aggregates[[agg]])){
+    manualList[[manualFile]] <- readRDS(paste0("Data/Raw/ManualLabels/", sub(".fcs", ".rds", manualFile)))
+  }
+}
+```
+
+## Define cell types of interest
+```{r}
+cellTypes <- c("unlabeled",
+               "All B cells",
+               "Transitional B cells",
+               "Naive B cells",
+               "IgD+ memory B cells",
+               "IgM+ memory B cells", 
+               "Class switched memory B cells", 
+               "Double negative B cells")
+
+metrics <- list("Model1_before" = list("files" = c(files_P1_C1, "tmp/before/agg_P1_C1.fcs", 
+                                                   "tmp/before/agg_P2_C1.fcs", files_P2_C1),
+                                       "channels" = cellTypeChannels),
+                "Model1_after" = list("files" = c(files_P1_C1_norm, "tmp/after/agg_P1_C1.fcs", 
+                                                  "tmp/after/agg_P2_C1.fcs", files_P2_C1_norm),
+                                       "channels" = cellTypeChannels),
+                "Model2_before" = list("files" = c(files_P1_C1_norm, files_P2_C1_norm, "tmp/after/agg_P1_C1.fcs", "tmp/after/agg_P2_C1.fcs",
+                                                   "tmp/before/agg_P1_C2.fcs", "tmp/before/agg_P2_C2.fcs", files_P1_C2, files_P2_C2),
+                                       "channels" = cellTypeChannels),
+                "Model2_after" = list("files" = c(files_P1_C1_norm, files_P2_C1_norm, "tmp/after/agg_P1_C1.fcs", "tmp/after/agg_P2_C1.fcs",
+                                                  "tmp/after/agg_P1_C2.fcs", "tmp/after/agg_P2_C2.fcs", files_P1_C2_norm, files_P2_C2_norm),
+                                       "channels" = cellTypeChannels),
+                "Model3a_before" = list("files" = c(files_P1_C1_norm, "tmp/before/agg_P1_C1.fcs", 
+                                                    "tmp/before/agg_P1_C2.fcs", files_P1_C2_norm),
+                                       "channels" = P1_cellStateChannels),
+                "Model3a_after" = list("files" = c(files_P1_C1_norm_norm, "tmp/after/agg_P1_C1.fcs", 
+                                                   "tmp/after/agg_P1_C2.fcs", files_P1_C2_norm_norm),
+                                       "channels" = P1_cellStateChannels),
+                "Model3b_before" = list("files" = c(files_P2_C1_norm, "tmp/before/agg_P2_C1.fcs", 
+                                                    "tmp/before/agg_P2_C2.fcs", files_P2_C2_norm),
+                                       "channels" = P2_cellStateChannels),
+                "Model3b_after" = list("files" = c(files_P2_C1_norm_norm, "tmp/after/agg_P2_C1.fcs", 
+                                                   "tmp/after/agg_P2_C2.fcs", files_P2_C2_norm_norm),
+                                       "channels" = P2_cellStateChannels))
+```
+
+## Calculate EMD and MAD
+```{r}
+EMDs <- list()
+MADs <- list()
+for (model in names(metrics)){
+  print(model)
+  files <- metrics[[model]][["files"]]
+  channels <- metrics[[model]][["channels"]]
+  
+  EMDs[[model]] <- emdEvaluation(files = files,
+                                 channels = channels,
+                                 manual = manualList, return_all = TRUE, manualThreshold = 20)
+  MADs[[model]] <- CytoNorm:::madEvaluation(files = files[!startsWith(files, "tmp")], 
+                                 channels = channels, return_all = TRUE,
+                                 manual = manualList, transformList = NULL)
+}
+```
+
+# Save metrics
+```{r}
+saveRDS(EMDs, "RDS/EMDs.rds")
+saveRDS(MADs, "RDS/MADs.rds")
+```
+
+# Convert metrics to scores
+## EMD
+### First approach: matched files
+```{r}
+EMD_scores <- list()
+EMD_scores[["matched"]] <- list()
+
+# M1: Look at max EMD between ==patient, ==TP
+for (subset in names(EMDs)[1:2]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["matched"]][[subset]] <- matrix(NA,
+                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                 dimnames = list(names(dist),
+                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        distances <- c()
+        for (i in 1:12){
+          distances <- c(distances, dist[[cellType]][[marker]][i, i+14])
+        }
+        EMD_scores[["matched"]][[subset]][cellType, marker] <- median(distances, na.rm = T)
+      }
+  }
+}
+
+# M2: Look at max EMD between ==patient, ==TP in cohort 2
+for (subset in names(EMDs)[3:4]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["matched"]][[subset]] <- matrix(NA,
+                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                 dimnames = list(names(dist),
+                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        distances <- c()
+        for (i in 29:40){
+          distances <- c(distances, dist[[cellType]][[marker]][i, i+12])
+        }
+        EMD_scores[["matched"]][[subset]][cellType, marker] <- median(distances, na.rm = T)
+      }
+  }
+}
+
+# M3: Look at max EMD between the 2 batches
+for (subset in names(EMDs)[5:8]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["matched"]][[subset]] <- matrix(NA,
+                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                 dimnames = list(names(dist),
+                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        distances <- c()
+        distances <- c(distances, dist[[cellType]][[marker]][1:12, 15:26])
+        EMD_scores[["matched"]][[subset]][cellType, marker] <- median(distances, na.rm = T)
+      }
+  }
+}
+```
+
+### Second approach: inter vs intra EMD
+```{r}
+EMD_scores[["interIntra"]] <- list()
+
+# M1
+for (subset in names(EMDs)[1:2]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["interIntra"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        inter <- max(dist[[cellType]][[marker]][1:12, 15:26], na.rm = T)
+        intra <- max(c(dist[[cellType]][[marker]][1:12, 1:12], 
+                       dist[[cellType]][[marker]][15:26, 15:26]), na.rm = T)
+        EMD_scores[["interIntra"]][[subset]][cellType, marker] <- inter/intra
+      }
+  }
+}
+
+# M2
+for (subset in names(EMDs)[3:4]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["interIntra"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        inter <- max(c(dist[[cellType]][[marker]][1:12, 13:24],
+                       dist[[cellType]][[marker]][1:24, 29:52],
+                       dist[[cellType]][[marker]][29:40, 41:52]), na.rm = T)
+        intra <- max(c(dist[[cellType]][[marker]][1:12, 1:12], 
+                       dist[[cellType]][[marker]][13:24, 13:24],
+                       dist[[cellType]][[marker]][29:40, 29:40],
+                       dist[[cellType]][[marker]][41:52, 41:52]), na.rm = T)
+        EMD_scores[["interIntra"]][[subset]][cellType, marker] <- inter/intra
+      }
+  }
+}
+
+# M3
+for (subset in names(EMDs)[5:8]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["interIntra"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        inter <- max(dist[[cellType]][[marker]][1:12, 15:26], na.rm = T)
+        intra <- max(c(dist[[cellType]][[marker]][1:12, 1:12], 
+                       dist[[cellType]][[marker]][15:26, 15:26]), na.rm = T)
+        EMD_scores[["interIntra"]][[subset]][cellType, marker] <- inter/intra
+      }
+  }
+}
+```
+
+### Third approach: based on aggregates
+```{r}
+EMD_scores[["aggregates"]] <- list()
+
+# M1
+for (subset in names(EMDs)[1:2]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["aggregates"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        EMD_scores[["aggregates"]][[subset]][cellType, marker] <- dist[[cellType]][[marker]][13, 14]
+      }
+  }
+}
+
+# M2
+for (subset in names(EMDs)[3:4]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["aggregates"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        EMD_scores[["aggregates"]][[subset]][cellType, marker] <- max(dist[[cellType]][[marker]][25:26, 27:28], na.rm = T)
+      }
+  }
+}
+
+# M3
+for (subset in names(EMDs)[5:8]){
+  dist <- EMDs[[subset]]$distances
+  EMD_scores[["aggregates"]][[subset]] <- matrix(NA,
+                                                 nrow = length(dist), ncol = length(dist[[1]]),
+                                                 dimnames = list(names(dist),
+                                                                 names(dist[[1]])))
+  for (cellType in names(dist)){
+      for (marker in names(dist[[cellType]])){
+        EMD_scores[["aggregates"]][[subset]][cellType, marker] <- dist[[cellType]][[marker]][13, 14]
+      }
+  }
+}
+```
+
+# Make figures
+```{r}
+pdf("Results/Metrics_agg.pdf", width = 9, height = 4)#7)
+print(ggplot() + theme_void())
+for (subset in unique(sub("_.*", "", names(EMD_scores[[1]])))){
+  markerlevels <- NULL
+  plotlist <- list()
+  for (eval in names(EMD_scores)[3]){
+    # EMD plot
+    EMD_before <- EMD_scores[[eval]][[paste0(subset, "_before")]][2:length(cellTypes),]
+    EMD_after <- EMD_scores[[eval]][[paste0(subset, "_after")]][2:length(cellTypes),]
+    
+    EMD_df <- data.frame("before" = c(EMD_before),
+                         "after" = c(EMD_after),
+                         "feature" = paste(rownames(EMD_before), rep(colnames(EMD_before), each = nrow(EMD_before)), sep = "_"))
+    if (is.null(markerlevels)){
+      markerlevels <- unique(unique(sub(".*_", "", EMD_df$feature)))
+    }
+    EMD_df$marker <- factor(sub(".*_", "", EMD_df$feature), levels = markerlevels)
+    EMD_df$celltype <- factor(sub("_.*", "", EMD_df$feature), levels = cellTypes)
+    max <- max(EMD_df[,1:2], na.rm = T)
+    EMD_df$worse <- EMD_df$before - EMD_df$after < 0
+    EMD_df$feature <- ifelse(abs(EMD_df$before - EMD_df$after) < 10, "", EMD_df$feature)
+    p_emd <- ggplot(EMD_df, aes(x = after, y = before)) +
+      xlim(0,max) + ylim(0,max) +
+      geom_point(aes(color = marker, shape = celltype)) +
+      geom_abline() +
+      scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+      ggtitle(paste0(subset, " ", eval, " EMD")) +
+      theme_minimal()
+  
+  leg_emd <- get_legend(p_emd)
+
+  p_emd <- p_emd  +
+      theme(legend.position = "none")
+  plotlist[[length(plotlist)+1]] <- p_emd    
+  }
+  
+  names(markerlevels) <- sub(".*<(.*)>.*", "\\1", markerlevels)
+  
+  # MAD plot
+  MAD_before <- MADs[[paste0(subset, "_before")]][["comparison"]][-1,]
+  MAD_after <- MADs[[paste0(subset, "_after")]][["comparison"]][-1,]
+  MAD_df <- data.frame("before" = c(MAD_before),
+                       "after" = c(MAD_after),
+                       "feature" = paste(rownames(MAD_before), rep(colnames(MAD_before), each = nrow(MAD_before)), sep = "_"))
+  MAD_df$marker <- factor(markerlevels[sub(".*_", "", MAD_df$feature)], levels = markerlevels)
+  MAD_df$celltype <- factor(sub("_.*", "", MAD_df$feature), levels = cellTypes)
+  max <- max(MAD_df[,1:2], na.rm = T)
+  MAD_df$bad <- abs(MAD_df$before - MAD_df$after) > 0.25
+  MAD_df$feature <- ifelse(abs(MAD_df$before - MAD_df$after) < 0.25, "", MAD_df$feature)
+  p_mad <- ggplot(MAD_df, aes(x = after, y = before)) +
+    xlim(0,max) + ylim(0,max) +
+    geom_point(aes(color = marker, shape = celltype)) +
+    geom_abline() +
+    scale_shape_manual(values = c(16, 17, 15, 3, 7, 8, 6)) +
+    ggtitle(paste0(subset, " MAD")) +
+    theme_minimal()
+
+  leg_mad <- get_legend(p_mad)
+
+  p_mad <- p_mad  +
+      theme(legend.position = "none")
+
+  plotlist[[length(plotlist)+1]] <- p_mad
+
+  print(ggarrange(ggarrange(plotlist = plotlist),
+                  as_ggplot(leg_emd), ncol=2, widths = c(4,1.5)))
+}
+dev.off()
+```
+
+# Heatmap plots
+```{r}
+pdf("Results/distanceHeatmaps.pdf")
+print(ggplot() + theme_void())
+for (subset in unique(sub("_.*", "", names(EMDs)))){
+  gaps <- c(12, 13, 14)
+  if (subset == "Model2"){
+    gaps <- c(12, 24, 25, 26, 27, 28, 40)
+  }
+  for (population in names(EMDs[[paste0(subset, "_before")]][["distances"]])[2:length(names(EMDs[[paste0(subset, "_before")]][["distances"]]))]){
+    for (marker in names(EMDs[[paste0(subset, "_before")]][["distances"]][[population]])){
+      for (condition in c("_before", "_after")){
+        tmp_m <- EMDs[[paste0(subset, condition)]][["distances"]][[population]][[marker]]
+        colnames(tmp_m) <- rownames(tmp_m) <- basename(colnames(tmp_m))
+        p <- pheatmap::pheatmap(mat = tmp_m, display_numbers = TRUE, 
+                                cluster_rows = FALSE, cluster_cols = FALSE, 
+                                breaks = seq(0,10,length.out=100), fontsize = ifelse(subset == "Model2", 5, 7),
+                                gaps_row = gaps, gaps_col = gaps,
+                                main = paste0(subset, condition, "\n ", population, "_", marker))
+        print(p)
+      }
+    }
+  }
+}
+dev.off()
+```

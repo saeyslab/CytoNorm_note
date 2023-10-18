@@ -1,0 +1,91 @@
+---
+title: "Model2_towardsDistribution"
+author: "Katrien Quintelier"
+date: "2023-06-20"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file()) # change wd from path dir to project dir for all chunks
+getwd()
+```
+
+# Load environment
+```{r}
+source("Environment.R")
+```
+
+Goal: Normalize files_P1_C2 and files_P2_C2 towards the goal distribution of the cohort 1 CytoNorm model
+
+# Train model
+```{r}
+# Extract goal distribution
+previousModel <- readRDS("RDS/model1_withoutControl.rds")
+goal_q <- CytoNorm:::getCytoNormQuantiles(previousModel)
+
+# Train model
+model2_towardsDistribution <- CytoNorm.train(files = c(files_P1_C2, files_P2_C2),
+                                             labels = c(rep(x = "P1",times = length(files_P1_C2)),
+                                                        rep(x = "P2",times = length(files_P2_C2))),
+                                             channels = cellTypeChannels,
+                                             transformList = NULL,
+                                             seed = 1,
+                                             plot = TRUE,
+                                             verbose = TRUE,
+                                             FlowSOM.params = list(nCells = 1e+06, 
+                                                                   xdim = 7, ydim = 7, 
+                                                                   nClus = 3, 
+                                                                   scale = FALSE),
+                                             normParams = list("goal" = goal_q))
+                                             #normParams = list("goal" = "P1")) #E.g. to normalize towards one of the batches
+saveRDS(object = model2_towardsDistribution, file = "RDS/model2_towardsDistribution.rds")
+```
+
+# Apply CytoNorm model
+```{r}
+# Normalize files
+CytoNorm.normalize(model = model2_towardsDistribution,
+                   files = c(files_P1_C2, files_P2_C2),
+                   labels = c(rep(x = "P1",times = length(files_P1_C2)),
+                              rep(x = "P2",times = length(files_P2_C2))),
+                   transformList = NULL,
+                   verbose = TRUE,
+                   prefix = "",
+                   transformList.reverse = NULL, 
+                   outputDir = "Data/Normalized_cellType")
+```
+
+# Density plots
+```{r}
+# List files
+files_P1_C2_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[5-8]_Panel1_TP..fcs", full.names = TRUE)
+files_P2_C2_norm <- list.files(path = "Data/Normalized_cellType", 
+                               pattern = "ID[5-8]_Panel2_TP..fcs", full.names = TRUE)
+
+# Make plots
+p <- plotDensities(input = list("P1_C2" = files_P1_C2,
+                                "P2_C2" = files_P2_C2,
+                                "P1_C2_norm" = files_P1_C2_norm,
+                                "P2_C2_norm" = files_P2_C2_norm),
+                   channels = cellTypeChannels,
+                   colors = batch_colors,
+                   model = model2_towardsDistribution,
+                   show_goal = TRUE)
+
+# Save to pdf
+pdf("Results/Model2_densities.pdf", height = 4*length(cellTypeChannels), width = 3*(length(p)-1)/(2*length(cellTypeChannels)))
+p_ <- ggarrange(ggarrange(plotlist = p[1:length(p)-1], ncol = (length(p)-1)/(2*length(cellTypeChannels)), nrow = 2*length(cellTypeChannels)),
+                p$legend, nrow = 2, heights = c(10,1))
+print(p_)
+dev.off()
+```
+
+# Spline plots
+```{r}
+pdf("Results/Model2_splines.pdf", height = 9, width = 12)
+plotSplines(model = model2_towardsDistribution, channels = cellTypeChannels, groupClusters = TRUE)
+dev.off()
+```
